@@ -169,7 +169,7 @@ Media paths differ between host and container filesystems. The database must sto
 
 ### Decision
 
-The database stores **container-canonical absolute paths** (e.g., `/media/videos/...`). Users must maintain consistent volume mount mappings across redeployments. `WATCH_PATHS` configures container paths.
+The database stores **container-canonical absolute paths** (e.g., `/media/videos/...`). Users must maintain consistent volume mount mappings across redeployments. Phase 1 watch path APIs persist container paths in PostgreSQL.
 
 ### Consequences
 

@@ -89,7 +89,7 @@ Durations are estimates for planning, not commitments.
 | SQLAlchemy models for `watch_paths`, `videos` (minimal) | backend |
 | Compose file with named volumes (2 services) | docker |
 | Dev hot-reload setup (Vite dev server + API separately in dev) | backend, frontend |
-| `.env.example` with `WATCH_PATHS`, `DATABASE_URL`, `ASSETS_PATH` | docker |
+| `.env.example` with `DATABASE_URL`, `ASSETS_PATH`, and deployment defaults | docker |
 
 ### 3.3 Exit Criteria
 

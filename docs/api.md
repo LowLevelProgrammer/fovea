@@ -142,7 +142,11 @@ Used in feeds, search results, and sidebars.
 Liveness probe. Returns 200 if process is running.
 
 ```json
-{ "status": "ok" }
+{
+  "status": "ok",
+  "application_name": "Fovea",
+  "application_version": "0.1.0"
+}
 ```
 
 #### `GET /health/ready`
@@ -152,7 +156,10 @@ Readiness probe. Checks database connectivity and migration state.
 ```json
 {
   "status": "ok",
+  "application_name": "Fovea",
+  "application_version": "0.1.0",
   "database": "connected",
+  "migration_revision": "0001_phase0_baseline",
   "background_last_seen": "2026-06-07T11:59:00Z"
 }
 ```

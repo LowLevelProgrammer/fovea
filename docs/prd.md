@@ -393,13 +393,12 @@ fovea-assets volume     → Generated thumbnails, previews (mounted in fovea)
 - The database stores **container-canonical paths only** (e.g., `/media/videos/...`)
 - The application never stores or resolves host filesystem paths
 - Users map host directories to container paths via Docker volume mounts
-- `WATCH_PATHS` lists container paths, not host paths
+- Watch path records store container paths, not host paths
 
 ### 7.4 Configuration
 
 Environment-driven configuration:
 
-- `WATCH_PATHS` — comma-separated container directory paths
 - `ASSETS_PATH` — generated asset root inside container
 - `DATABASE_URL`
 - `SCAN_INTERVAL_SECONDS`

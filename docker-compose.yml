@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fovea}
+      POSTGRES_USER: ${POSTGRES_USER:-fovea}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fovea}
+    volumes:
+      - fovea-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  fovea:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fovea}:${POSTGRES_PASSWORD:-fovea}@postgres:5432/${POSTGRES_DB:-fovea}
+      ASSETS_PATH: /data/fovea/assets
+      FRONTEND_DIST_PATH: /app/frontend/dist
+    ports:
+      - "${FOVEA_PORT:-8080}:8080"
+    volumes:
+      - fovea-assets:/data/fovea/assets
+      - ${MEDIA_PATH:-./media}:/media/videos:ro
+
+volumes:
+  fovea-db:
+  fovea-assets:

@@ -265,9 +265,7 @@ volumes:
   - /media/archive:/media/archive:ro
 ```
 
-`WATCH_PATHS=/media/videos,/media/archive`
-
-The database stores **container-canonical paths only**. The application never stores or resolves host filesystem paths. Users map host directories to container paths via Docker volume mounts; `WATCH_PATHS` uses container paths.
+The database stores **container-canonical paths only**. The application never stores or resolves host filesystem paths. Users map host directories to container paths via Docker volume mounts; Phase 1 watch path APIs persist the container paths in PostgreSQL.
 
 **Decision (confirmed):** Container-canonical paths. See [ADR-006](./decisions.md#adr-006-store-container-canonical-paths-in-database).
 
@@ -412,7 +410,7 @@ services:
       - fovea-assets:/data/fovea/assets
     environment:
       DATABASE_URL: postgresql://...
-      WATCH_PATHS: /media/videos            # container path, not host path
+      # Watch paths are stored in PostgreSQL via Phase 1 APIs.
       ASSETS_PATH: /data/fovea/assets
 ```
 
