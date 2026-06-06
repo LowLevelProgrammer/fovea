@@ -26,7 +26,7 @@ All Phase 0–5 work targets a **single `fovea` container** plus `postgres`. Bac
 ### 1.2 What We Explicitly Defer
 
 - AI / embeddings / semantic search
-- Transcoding
+- Transcoding, including on-the-fly or pre-generated browser compatibility proxies
 - Authentication, accounts, permissions, multi-user
 - Redis, message brokers, dedicated search engines, vector databases
 - Separate worker containers and microservice decomposition
@@ -122,7 +122,7 @@ Durations are estimates for planning, not commitments.
 - [ ] FFprobe integration → `video_probe` table
 - [ ] PostgreSQL `jobs` table + in-process job poller
 - [ ] Detect removed files → `status = unavailable`
-- [ ] Basic rename detection (size + mtime heuristic)
+- [ ] Rename detection with partial hash enabled by default
 - [ ] Ignore rules for temp/partial files
 - [ ] `GET /library/status` and `POST /library/scan`
 
@@ -148,7 +148,7 @@ Durations are estimates for planning, not commitments.
 |--------|------------------|-------------------|
 | Monolith (watcher + jobs in-process) | **Yes** | Split only if demonstrated bottleneck |
 | PostgreSQL job queue | **Yes** | External queue only if DB polling insufficient |
-| Partial hash rename detection | Off by default | Configurable |
+| Partial hash rename detection | **On by default** | Configurable fallback to size/duration |
 | Per-file scan events table | Skip | Add if debugging needed |
 
 ---
@@ -160,7 +160,7 @@ Durations are estimates for planning, not commitments.
 ### 5.1 Deliverables
 
 - [ ] `GET /videos/{id}` detail endpoint
-- [ ] `GET /videos/{id}/stream` with byte-range support
+- [ ] `GET /videos/{id}/stream` with API byte-range support
 - [ ] Video list page (simple grid, sorted by `added_at`)
 - [ ] Video page with HTML5 player
 - [ ] Basic title display (auto from filename)
@@ -335,7 +335,7 @@ Durations are estimates for planning, not commitments.
 
 ### Phase 10 — Optional Transcoding
 
-**Architectural constraint preserved:** transcodes write to asset store only, never source.
+**Architectural constraint preserved:** transcodes write to asset store only, never source. This is explicitly out of scope for Phase 1.
 
 - On-demand or pre-generated browser-compatible proxy files
 - Codec compatibility detection and automatic proxy suggestion

@@ -139,7 +139,7 @@ Central entity. One row per file path.
 | `title_override` | `TEXT` | NULL | If set, display this instead of auto title |
 | `file_size` | `BIGINT` | NOT NULL | Bytes |
 | `file_mtime` | `TIMESTAMPTZ` | NOT NULL | From filesystem |
-| `fingerprint` | `TEXT` | NULL | `size:mtime` or hash-based |
+| `fingerprint` | `TEXT` | NULL | Partial hash fingerprint by default; `size:mtime` fallback if configured |
 | `status` | `TEXT` | NOT NULL | See status enum below |
 | `added_at` | `TIMESTAMPTZ` | NOT NULL | First discovery |
 | `last_seen_at` | `TIMESTAMPTZ` | NOT NULL | Last successful scan saw file |
@@ -204,7 +204,7 @@ References to generated files in the asset store.
 |--------|------|-------|
 | `id` | `UUID` | PK |
 | `video_id` | `UUID` | FK → videos |
-| `asset_type` | `TEXT` | `thumbnail`, `preview_sprite`, `hover_sprite`, `hover_clip` |
+| `asset_type` | `TEXT` | `thumbnail`, `preview_sprite`, `hover_sprite` |
 | `storage_path` | `TEXT` | Path relative to asset root |
 | `meta` | `JSONB` | Dimensions, frame count, interval, vtt offset |
 | `created_at` | `TIMESTAMPTZ` | |

@@ -119,7 +119,7 @@ sequenceDiagram
     API->>DB: update position, watch count
 ```
 
-**No transcoding in Phase 1.** The API serves the original file with `Accept-Ranges` support. Browser compatibility is the user's responsibility (or a future optional transcoding service that writes only to the asset store — explicitly out of Phase 1).
+**No transcoding in Phase 1.** The API streams the original file with `Accept-Ranges` support. Browser compatibility is an accepted Phase 1 limitation; unsupported codecs are surfaced clearly in the UI rather than transcoded.
 
 ### 3.3 Recommendations
 
@@ -185,7 +185,7 @@ Background work runs inside the monolith as an asyncio task loop that polls the 
 | `probe_video` | New/changed file | Duration, codecs, resolution in DB |
 | `generate_thumbnail` | After probe | Poster image in asset store |
 | `generate_preview_strip` | After probe | Seekbar preview sprites |
-| `generate_hover_preview` | After probe (lower priority) | Card hover sprite/clip |
+| `generate_hover_preview` | After probe (lower priority) | Card hover sprite |
 | `reconcile_missing` | Scan diff | Mark videos unavailable |
 
 **Phase 1 job queue decision:** PostgreSQL `jobs` table, polled by the monolith process.
@@ -298,11 +298,11 @@ Match deleted + added pairs within a scan window by:
 
 1. File size (exact)
 2. Duration from last known probe (if available)
-3. Optional partial hash (first/last N MB) for high confidence
+3. Partial hash (first/last N MB) for high confidence
 
-**Tradeoff:** Partial hashing reads source files but does not modify them. CPU and I/O cost during large reorganizations.
+**Tradeoff:** Partial hashing reads source files but does not modify them. CPU and I/O cost during large reorganizations is accepted to reduce false rename matches.
 
-**Proposal:** Partial hash opt-in via config (`RENAME_DETECTION=size_duration|partial_hash`).
+**Decision:** Partial hash rename detection is enabled by default via `RENAME_DETECTION=partial_hash`. Operators may downgrade to `size_duration` if scan I/O is more important than rename confidence.
 
 ### 6.4 Ignore Rules
 
@@ -486,7 +486,7 @@ New job types extend the worker without changing the API contract.
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|------------|--------|------------|
-| Browser can't play codec | High | Playback fails | Document codec guidance; future optional transcode-to-asset-store |
+| Browser can't play codec | High | Playback fails | Document codec guidance; show unsupported-codec state; transcoding remains out of Phase 1 |
 | NFS watcher misses events | Medium | Stale library | Polling + scheduled reconciliation |
 | Large library scan I/O | Medium | Slow startup | Incremental scan; priority queue for new files |
 | Rename detection false positives | Low | Wrong history attachment | Conservative matching; manual unlink in UI later |

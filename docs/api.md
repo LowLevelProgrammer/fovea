@@ -391,7 +391,7 @@ Videos with a specific tag. Paginated `VideoSummary` list.
 
 ### 3.7 Assets
 
-Generated assets are served through the API (or optionally via nginx direct alias in production).
+Generated assets are served through the API. v1 preview assets are sprites, not muted video clips.
 
 #### `GET /assets/thumbnails/{video_id}.jpg`
 

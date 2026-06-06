@@ -238,7 +238,7 @@ Sections should be scrollable card grids. Empty states should guide users to con
 
 ### 5.2 Video Page
 
-- HTML5 video player (direct file serve or byte-range streaming)
+- HTML5 video player backed by API byte-range streaming
 - Title and metadata display
 - Editable tags (DB-only)
 - Watch history integration (resume position, mark watched)
@@ -300,10 +300,7 @@ On timeline hover, show preview frames (filmstrip or single frame), similar to Y
 
 #### Video Card Hover Preview
 
-On card hover in grids/sidebars:
-
-- **Option A:** Muted autoplay of a short WebM/MP4 preview clip
-- **Option B:** Animated sprite sheet / WebP sequence
+On card hover in grids/sidebars, v1 uses animated sprite sheets / WebP sequences.
 
 **Tradeoff:**
 
@@ -312,7 +309,7 @@ On card hover in grids/sidebars:
 | Muted short clip | High fidelity, familiar UX | Larger assets, more FFmpeg work |
 | Sprite sheet | Efficient for many cards | Less smooth, harder to generate |
 
-**Proposal:** Phase 1 implements sprite-based hover previews (lower storage/CPU); muted clip previews as Phase 2 enhancement.
+**Decision:** v1 implements sprite-based hover previews. Muted clip previews are deferred until after v1.
 
 ### 5.7 Generated Assets
 
@@ -320,7 +317,7 @@ May generate:
 
 - Thumbnails (poster frame)
 - Preview frames (seekbar)
-- Hover preview sprites/clips
+- Hover preview sprites
 - Metadata indexes
 
 **Rules:**
@@ -408,6 +405,7 @@ Environment-driven configuration:
 - `SCAN_INTERVAL_SECONDS`
 - `RANDOM_DISCOVERY_RATIO` (default 0.2)
 - `FFMPEG_CONCURRENCY` (default 2)
+- `RENAME_DETECTION` (default `partial_hash`; fallback `size_duration`)
 
 ---
 
@@ -435,8 +433,8 @@ Design architecture to support these later **without implementing now**:
 | 2 | Supported video formats? | FFprobe failures, playback compatibility | Common containers: mp4, mkv, webm, avi, mov |
 | 3 | Recursive scanning depth? | Performance, unexpected content | Recursive, with optional ignore globs |
 | 4 | Symlinks and network mounts? | Watcher reliability | Follow symlinks; tolerate stale NFS with rescan |
-| 5 | Transcoding for browser compatibility? | Conflicts with "no re-encode" | **No transcoding Phase 1**; direct serve + browser-native codecs only |
-| 6 | How to detect renames vs delete+add? | User-facing continuity | Heuristic match on size + duration + partial hash |
+| 5 | Transcoding for browser compatibility? | Conflicts with "no re-encode" | **No transcoding Phase 1**; API stream + browser-native codecs only |
+| 6 | How to detect renames vs delete+add? | User-facing continuity | Partial hash rename detection enabled by default |
 | 7 | Watch "completed" threshold? | Recommendation inputs | 90% duration or explicit mark |
 | 8 | Mobile / TV clients? | API design | Responsive web only Phase 1 |
 | 9 | Subtitle support? | Sidecar files vs embedded | Detect sidecar `.srt`/`.vtt` read-only; no modification |
@@ -458,6 +456,7 @@ Design architecture to support these later **without implementing now**:
 
 - Authentication, accounts, permissions, and user management (Phase 1)
 - Redis, message brokers, and auxiliary infrastructure services (Phase 1)
+- Transcoding, including browser compatibility proxy files (Phase 1)
 - User management and sharing (Phase 1)
 - Remote access / tunnel setup (user's infra responsibility)
 - Mobile native apps

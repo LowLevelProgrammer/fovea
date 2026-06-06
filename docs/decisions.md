@@ -236,7 +236,7 @@ Browser playback requires compatible codecs (typically H.264 + AAC in MP4). Many
 
 ### Decision
 
-Phase 1 serves **original files directly** via byte-range streaming. No transcoding pipeline. Document codec compatibility expectations for users.
+Phase 1 serves **original files through the API** via byte-range streaming. No transcoding pipeline. Document codec compatibility expectations for users.
 
 ### Consequences
 
@@ -250,10 +250,10 @@ Phase 1 serves **original files directly** via byte-range streaming. No transcod
 | Alternative | Rejected because |
 |-------------|------------------|
 | On-the-fly transcode to temp | CPU heavy; temp storage management |
-| Pre-transcode to asset store | Phase 1 scope; revisit as ADR-018 |
+| Pre-transcode to asset store | Out of Phase 1 scope; revisit after v1 |
 | Client-side WASM decode | Immature for all formats; high client CPU |
 
-**Future path:** ADR-018 (optional proxy transcode to asset store only).
+**Future path:** ADR-018 / ADR-023 document the boundary for optional post-v1 proxy transcodes.
 
 ---
 
@@ -347,9 +347,9 @@ All generated assets live under a configurable **asset store** (default `/data/f
 
 ---
 
-## ADR-012: Sprite-Based Hover Previews Before Video Clips
+## ADR-012: Sprite-Based Hover Previews for v1
 
-**Status:** Accepted (provisional)  
+**Status:** Accepted  
 **Date:** 2026-06-07
 
 ### Context
@@ -358,7 +358,7 @@ YouTube-style card hover can use muted video clips or animated sprite sheets. Bo
 
 ### Decision
 
-Phase 4 implements **sprite sheet / WebP** hover previews first. Muted short video clips deferred to Phase 4.5+.
+v1 implements **sprite sheet / WebP** hover previews. Muted short video clips are deferred until after v1.
 
 ### Consequences
 
@@ -411,9 +411,9 @@ Use a **three-layer** approach:
 
 ---
 
-## ADR-014: Rename Detection via Heuristic Matching
+## ADR-014: Rename Detection via Partial Hash by Default
 
-**Status:** Accepted (provisional)  
+**Status:** Accepted  
 **Date:** 2026-06-07
 
 ### Context
@@ -426,16 +426,18 @@ Within a scan window, match removed + added file pairs by:
 
 1. Exact file size (required)
 2. Duration from existing probe (required if available)
-3. Partial content hash (optional, config-gated)
+3. Partial content hash of the first/last N MB (enabled by default)
 
 On match, update `file_path` on existing `videos` row.
+
+Operators may configure a cheaper `size_duration` mode if their storage is especially I/O constrained.
 
 ### Consequences
 
 - **Positive:** Watch history survives renames.
-- **Positive:** No fingerprint storage required by default.
-- **Negative:** False positives possible (two files, same size and duration).
+- **Positive:** Lower false-positive risk than size/duration alone.
 - **Negative:** Partial hash reads source files (read-only, but I/O cost).
+- **Negative:** Very large reorganizations can add noticeable scan latency.
 
 ### Alternatives Considered
 
@@ -559,7 +561,7 @@ Job processing uses a PostgreSQL `jobs` table polled by the monolith. Search use
 
 ### Context
 
-ADR-008 defers transcoding, but long-term browser compatibility may require proxy files.
+ADR-008 and ADR-023 exclude transcoding from Phase 1, but long-term browser compatibility may require proxy files.
 
 ### Decision (proposed)
 
@@ -661,7 +663,7 @@ Volumes: `fovea-db`, `fovea-assets`, plus user-supplied read-only media mounts.
 
 ## ADR-020: Stream Through API (Not Direct nginx File Serve)
 
-**Status:** Accepted (provisional)  
+**Status:** Accepted  
 **Date:** 2026-06-07
 
 ### Context
@@ -670,7 +672,7 @@ Video streaming can be served by nginx `sendfile` directly or proxied through Fa
 
 ### Decision
 
-Phase 1–2 stream through **FastAPI** with byte-range support. API validates video ID → DB path → watch path prefix before opening file. nginx `X-Accel-Redirect` reconsidered in Phase 5 if performance requires it.
+Phase 1 streams through **FastAPI** with byte-range support. API validates video ID → DB path → watch path prefix before opening file. nginx `X-Accel-Redirect` may be reconsidered after v1 if performance requires it.
 
 ### Consequences
 
@@ -685,6 +687,45 @@ Phase 1–2 stream through **FastAPI** with byte-range support. API validates vi
 |-------------|------------------|
 | Signed URL to nginx internal location | More moving parts for Phase 1 |
 | Direct file path in frontend | Severe security risk |
+
+---
+
+## ADR-023: Phase 1 Codec Limitations Are Acceptable
+
+**Status:** Accepted  
+**Date:** 2026-06-07
+
+### Context
+
+Fovea streams user-owned files in place and does not import or duplicate source media. Browser playback support varies by container, video codec, audio codec, operating system, and browser. Solving every compatibility case requires transcoding, proxy files, or a separate playback service.
+
+### Decision
+
+Phase 1 does **not** transcode media in any form:
+
+- No on-the-fly transcoding
+- No pre-generated browser compatibility proxies
+- No temporary transcode cache
+- No sidecar media service
+
+Unsupported browser codecs are an acceptable Phase 1 limitation. The API streams original files through FastAPI; the UI should show clear unsupported-codec or playback-failed states where possible.
+
+### Consequences
+
+- **Positive:** Preserves read-only and no-duplication guarantees.
+- **Positive:** Avoids large CPU, storage, and operational costs in v1.
+- **Positive:** Keeps the two-container deployment intact.
+- **Negative:** Some indexed videos will not play in some browsers.
+- **Negative:** Documentation and UI must set expectations clearly.
+
+### Alternatives Considered
+
+| Alternative | Rejected because |
+|-------------|------------------|
+| On-the-fly transcoding | CPU intensive; complex cancellation and temp storage lifecycle |
+| Pre-generated proxy files | Storage duplication and heavy initial processing |
+| Bundled media sidecar service | Adds infrastructure beyond the Phase 1 deployment contract |
+| Client-side WASM decode | Browser performance and compatibility are not reliable enough |
 
 ---
 
@@ -703,27 +744,24 @@ Phase 1–2 stream through **FastAPI** with byte-range support. API validates vi
 | 009 | Metadata recommendations | Accepted |
 | 010 | 20% random injection | Accepted |
 | 011 | Separate asset store | Accepted |
-| 012 | Sprite hover previews first | Accepted (provisional) |
+| 012 | Sprite hover previews for v1 | Accepted |
 | 013 | Hybrid watcher | Accepted |
-| 014 | Heuristic rename detection | Accepted (provisional) |
+| 014 | Partial hash rename detection by default | Accepted |
 | 015 | Single-user Phase 1 (no auth) | Accepted |
 | 016 | PostgreSQL FTS | Accepted |
 | 017 | No auxiliary infra Phase 1 | Accepted |
 | 018 | Future proxy transcode | Proposed |
 | 019 | Recommendation provider interface | Accepted |
-| 020 | Stream through API | Accepted (provisional) |
+| 020 | Stream through API | Accepted |
 | 021 | Monolith-first architecture | Accepted |
 | 022 | Two-container deployment | Accepted |
+| 023 | Phase 1 codec limitations acceptable | Accepted |
 
 ---
 
 ## Decisions Requiring User Input
 
-The following items remain open:
-
-1. **ADR-012:** Sprite hover vs muted clip — is sprite quality acceptable for v1?
-2. **ADR-014:** Enable partial hash rename detection by default?
-3. **ADR-020:** Stream through API vs nginx internal redirect at scale?
+None at this time.
 
 ---
 
