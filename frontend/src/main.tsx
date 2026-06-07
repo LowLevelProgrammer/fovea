@@ -4,11 +4,21 @@ import ReactDOM from "react-dom/client";
 import "./styles.css";
 
 type ReadyResponse = {
-  status: string;
+  status: "ready" | "degraded";
   application_name: string;
   application_version: string;
-  database: string;
-  migration_revision: string | null;
+  api: {
+    status: string;
+  };
+  database: {
+    status: string;
+    detail: string | null;
+  };
+  migrations: {
+    status: string;
+    revision: string | null;
+    detail: string | null;
+  };
   checked_at: string;
 };
 
@@ -25,11 +35,11 @@ function App() {
         const payload = (await response.json()) as ReadyResponse;
         if (!cancelled) {
           setHealth(payload);
-          setError(response.ok ? null : "Backend is reachable but not ready.");
+          setError(response.ok ? null : "Backend returned an unexpected health response.");
         }
       } catch {
         if (!cancelled) {
-          setError("Backend is not reachable yet.");
+          setError("API is not reachable yet.");
         }
       }
     }
@@ -54,15 +64,15 @@ function App() {
         <dl className="status">
           <div>
             <dt>API</dt>
-            <dd>{error ? "Not ready" : health?.status ?? "Checking"}</dd>
+            <dd>{health?.api.status ?? (error ? "unreachable" : "checking")}</dd>
           </div>
           <div>
             <dt>Database</dt>
-            <dd>{health?.database ?? "Checking"}</dd>
+            <dd>{health?.database.status ?? "checking"}</dd>
           </div>
           <div>
             <dt>Migration</dt>
-            <dd>{health?.migration_revision ?? "Pending"}</dd>
+            <dd>{health?.migrations.revision ?? health?.migrations.status ?? "checking"}</dd>
           </div>
           <div>
             <dt>Version</dt>
@@ -70,6 +80,11 @@ function App() {
           </div>
         </dl>
 
+        {health?.status === "degraded" ? (
+          <p className="notice">
+            API is running, but readiness is degraded. {health.database.detail ?? health.migrations.detail}
+          </p>
+        ) : null}
         {error ? <p className="notice">{error}</p> : null}
       </section>
     </main>

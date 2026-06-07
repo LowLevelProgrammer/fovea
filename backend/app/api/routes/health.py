@@ -1,8 +1,7 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter
 from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import get_settings
 from app.db.session import async_session
@@ -21,38 +20,69 @@ async def live() -> dict[str, str]:
 
 
 @router.get("/ready")
-async def ready(response: Response) -> dict[str, str | None]:
-    async with async_session() as session:
-        try:
-            await session.execute(text("SELECT 1"))
-            revision_result = await session.execute(
-                text(
-                    """
-                    SELECT version_num
-                    FROM alembic_version
-                    LIMIT 1
-                    """
-                )
-            )
-            migration_revision = revision_result.scalar_one_or_none()
-        except SQLAlchemyError as exc:
-            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-            return {
-                "status": "error",
-                "application_name": settings.app_name,
-                "application_version": settings.app_version,
-                "database": "unavailable",
-                "migration_revision": None,
-                "checked_at": datetime.now(UTC).isoformat(),
-                "detail": str(exc),
-            }
+async def ready() -> dict[str, object]:
+    database_status: dict[str, str | None] = {"status": "unknown", "detail": None}
+    migration_status: dict[str, str | None] = {
+        "status": "unknown",
+        "revision": None,
+        "detail": None,
+    }
+
+    try:
+        async with async_session() as session:
+            try:
+                await session.execute(text("SELECT 1"))
+                database_status = {"status": "connected", "detail": None}
+            except Exception as exc:
+                database_status = {"status": "unavailable", "detail": str(exc)}
+                migration_status = {
+                    "status": "unavailable",
+                    "revision": None,
+                    "detail": "Database is unavailable.",
+                }
+            else:
+                try:
+                    revision_result = await session.execute(
+                        text(
+                            """
+                            SELECT version_num
+                            FROM alembic_version
+                            LIMIT 1
+                            """
+                        )
+                    )
+                    migration_revision = revision_result.scalar_one_or_none()
+                    migration_status = {
+                        "status": "available" if migration_revision else "unavailable",
+                        "revision": migration_revision,
+                        "detail": None if migration_revision else "No Alembic revision row found.",
+                    }
+                except Exception as exc:
+                    migration_status = {
+                        "status": "unavailable",
+                        "revision": None,
+                        "detail": str(exc),
+                    }
+    except Exception as exc:
+        database_status = {"status": "unavailable", "detail": str(exc)}
+        migration_status = {
+            "status": "unavailable",
+            "revision": None,
+            "detail": "Database is unavailable.",
+        }
+
+    ready_status = (
+        "ready"
+        if database_status["status"] == "connected" and migration_status["status"] == "available"
+        else "degraded"
+    )
 
     return {
-        "status": "ok",
+        "status": ready_status,
         "application_name": settings.app_name,
         "application_version": settings.app_version,
-        "database": "connected",
-        "migration_revision": migration_revision,
-        "background_last_seen": None,
+        "api": {"status": "running"},
+        "database": database_status,
+        "migrations": migration_status,
         "checked_at": datetime.now(UTC).isoformat(),
     }

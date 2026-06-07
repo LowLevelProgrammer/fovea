@@ -155,12 +155,42 @@ Readiness probe. Checks database connectivity and migration state.
 
 ```json
 {
-  "status": "ok",
+  "status": "ready",
   "application_name": "Fovea",
   "application_version": "0.1.0",
-  "database": "connected",
-  "migration_revision": "0001_phase0_baseline",
-  "background_last_seen": "2026-06-07T11:59:00Z"
+  "api": { "status": "running" },
+  "database": {
+    "status": "connected",
+    "detail": null
+  },
+  "migrations": {
+    "status": "available",
+    "revision": "0001_phase0_baseline",
+    "detail": null
+  },
+  "checked_at": "2026-06-07T11:59:00Z"
+}
+```
+
+If PostgreSQL is unavailable, the endpoint still returns HTTP 200 because the API process is
+running. The payload reports degraded readiness:
+
+```json
+{
+  "status": "degraded",
+  "application_name": "Fovea",
+  "application_version": "0.1.0",
+  "api": { "status": "running" },
+  "database": {
+    "status": "unavailable",
+    "detail": "connection failed"
+  },
+  "migrations": {
+    "status": "unavailable",
+    "revision": null,
+    "detail": "Database is unavailable."
+  },
+  "checked_at": "2026-06-07T11:59:00Z"
 }
 ```
 
