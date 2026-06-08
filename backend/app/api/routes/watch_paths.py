@@ -117,5 +117,5 @@ async def delete_watch_path(watch_path_id: uuid.UUID) -> None:
                 detail="Watch path not found.",
             )
 
-        session.delete(watch_path)
+        await session.delete(watch_path)
         await session.commit()
