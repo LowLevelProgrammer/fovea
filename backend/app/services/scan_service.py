@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import PurePosixPath
 from typing import Optional
 from uuid import UUID
 
@@ -10,6 +11,16 @@ from app.db.session import async_session
 from app.models.watch_path import WatchPath
 from app.models.video import Video
 from app.services.video_scanner import VideoScanner
+
+
+def _is_under_watch_path(file_path: str, watch_path: str) -> bool:
+    file_path_obj = PurePosixPath(file_path)
+    watch_path_obj = PurePosixPath(watch_path)
+
+    return (
+        file_path_obj == watch_path_obj
+        or watch_path_obj in file_path_obj.parents
+    )
 
 
 @dataclass
@@ -125,13 +136,31 @@ class ScanService:
 
             # 5. Mark videos not found as unavailable (Scenario 3)
             now = datetime.now(tz=datetime.now().astimezone().tzinfo)
+
             result = await session.execute(
                 select(Video).where(Video.status != "unavailable")
             )
             all_available_videos = result.scalars().all()
 
+            if watch_path_id is None:
+                # Full library scan:
+                # Consider every available video in the database.
+                candidate_videos = all_available_videos
+
+            else:
+                # Targeted scan:
+                # Only consider videos that belong to the scanned watch path.
+                target_watch_path = paths_to_scan[0]
+                watch_root = target_watch_path.path
+
+                candidate_videos = [
+                    video
+                    for video in all_available_videos
+                    if _is_under_watch_path(video.file_path, watch_root)
+                ]
+
             videos_unavailable = 0
-            for video in all_available_videos:
+            for video in candidate_videos:
                 if video.file_path not in discovered_paths:
                     video.status = "unavailable"
                     video.unavailable_since = now
