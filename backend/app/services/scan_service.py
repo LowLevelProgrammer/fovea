@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from app.db.session import async_session
 from app.models.watch_path import WatchPath
 from app.models.video import Video
+from app.services.job_service import JobService
 from app.services.video_scanner import VideoScanner
 
 
@@ -47,6 +48,8 @@ class ScanService:
         - Missing files: UPDATE status='unavailable', unavailable_since=now()
         - Reappearing files: UPDATE status='discovered', unavailable_since=null
 
+        Probe jobs are enqueued for new and reappearing videos (unless duplicate active jobs exist).
+
         Args:
             watch_path_id: Optional UUID to scan a single watch path; if None, scans all enabled paths
 
@@ -60,6 +63,7 @@ class ScanService:
         start_time = datetime.now(tz=datetime.now().astimezone().tzinfo)
         discovered_paths: set[str] = set()
         watch_paths_scanned = 0
+        videos_to_probe: list[Video] = []  # Track ORM objects needing probes
 
         async with async_session() as session:
             # 1. Fetch watch paths to scan
@@ -104,6 +108,7 @@ class ScanService:
                                 last_seen_at=datetime.now(tz=datetime.now().astimezone().tzinfo),
                             )
                             session.add(video)
+                            videos_to_probe.append(video)  # Track ORM object for probe enqueueing
                         elif existing_video.status == "unavailable":
                             # Scenario 2b: Reappearing file
                             existing_video.status = "discovered"
@@ -113,8 +118,10 @@ class ScanService:
                             existing_video.file_mtime = df.file_mtime
                             existing_video.fingerprint = df.fingerprint
                             session.add(existing_video)
+                            videos_to_probe.append(existing_video)  # Track ORM object for probe enqueueing
                         else:
                             # Scenario 2a: Seen again (available)
+                            # Do NOT enqueue a new probe job
                             existing_video.last_seen_at = datetime.now(tz=datetime.now().astimezone().tzinfo)
                             existing_video.file_size = df.file_size
                             existing_video.file_mtime = df.file_mtime
@@ -127,7 +134,8 @@ class ScanService:
                     # Skip inaccessible watch paths but continue scanning others
                     continue
 
-            # 4. Commit video upserts
+            # 4. Flush to populate UUIDs (server-side defaults), then commit
+            await session.flush()  # Populate video.id before commit
             try:
                 await session.commit()
             except IntegrityError:
@@ -173,6 +181,17 @@ class ScanService:
             except IntegrityError:
                 await session.rollback()
                 raise RuntimeError("Failed to mark videos as unavailable")
+
+            # 7. Enqueue probe jobs for new/reappearing videos
+            # Use tracked ORM objects (UUIDs populated during flush() in step 4)
+            # Duplicate-prevention strategy: Best-effort check (not race-free)
+            # - has_active_probe_job() queries for pending/in_progress probe jobs
+            # - If found, skip creation; otherwise, create new job
+            # - Race condition possible: between check and creation, another worker may create job
+            # - Acceptable for Phase 1 (single in-process worker); worst case = duplicate pending job
+            for video in videos_to_probe:
+                if not await JobService.has_active_probe_job(video.id):
+                    await JobService.create_probe_job(video.id)
 
         elapsed = (datetime.now(tz=datetime.now().astimezone().tzinfo) - start_time).total_seconds()
 
