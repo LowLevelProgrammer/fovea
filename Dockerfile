@@ -19,6 +19,10 @@ RUN useradd --create-home --shell /usr/sbin/nologin fovea \
     && mkdir -p /data/fovea/assets \
     && chown -R fovea:fovea /data/fovea
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
