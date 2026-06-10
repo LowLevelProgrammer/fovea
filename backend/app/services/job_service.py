@@ -1,16 +1,24 @@
 """Job service for managing probe job lifecycle in PostgreSQL."""
 
+import asyncio
+import logging
 from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import async_session
 from app.models.job import Job
 
+logger = logging.getLogger(__name__)
+
 
 class JobService:
     """Service for managing jobs stored in PostgreSQL."""
+
+    COMPLETE_JOB_MAX_ATTEMPTS = 3
+    COMPLETE_JOB_RETRY_DELAY_SECONDS = 0.5
 
     @staticmethod
     async def has_active_probe_job(video_id: UUID) -> bool:
@@ -80,7 +88,10 @@ class JobService:
                 # SELECT ... FOR UPDATE locks the row until transaction commits
                 result = await session.execute(
                     select(Job)
-                    .where(Job.status == "pending")
+                    .where(
+                        Job.status == "pending",
+                        Job.job_type == "probe",
+                    )
                     .order_by(Job.created_at)
                     .limit(1)
                     .with_for_update(skip_locked=True)
@@ -98,8 +109,19 @@ class JobService:
             # Transaction commits here, releasing the lock
             # Refresh to get updated timestamps
             await session.refresh(job)
-            
+
             return job
+
+    @staticmethod
+    async def _apply_job_completion(
+        session: AsyncSession, job_id: UUID, result: Optional[dict]
+    ) -> None:
+        job = await session.get(Job, job_id)
+        if job is None:
+            raise ValueError(f"Job not found: {job_id}")
+
+        job.status = "completed"
+        job.result = result
 
     @staticmethod
     async def complete_job(job_id: UUID, result: Optional[dict] = None) -> None:
@@ -111,24 +133,57 @@ class JobService:
             result: Optional dictionary of result data to store
         """
         async with async_session() as session:
-            job_result = await session.execute(select(Job).where(Job.id == job_id))
-            job = job_result.scalar_one_or_none()
-
-            if job is None:
-                raise ValueError(f"Job not found: {job_id}")
-
-            job.status = "completed"
-            job.result = result
-            session.add(job)
+            await JobService._apply_job_completion(session, job_id, result)
             await session.commit()
+
+    @staticmethod
+    async def complete_job_with_retry(job_id: UUID, result: Optional[dict] = None) -> None:
+        """
+        Mark a job completed, retrying transient failures.
+
+        After probe data is persisted, callers use this so a job cannot remain
+        in_progress due to a one-off DB error during completion.
+        """
+        last_error: Exception | None = None
+        for attempt in range(JobService.COMPLETE_JOB_MAX_ATTEMPTS):
+            try:
+                await JobService.complete_job(job_id, result)
+                return
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "complete_job attempt %d/%d failed for job %s: %s",
+                    attempt + 1,
+                    JobService.COMPLETE_JOB_MAX_ATTEMPTS,
+                    job_id,
+                    exc,
+                )
+                if attempt < JobService.COMPLETE_JOB_MAX_ATTEMPTS - 1:
+                    await asyncio.sleep(JobService.COMPLETE_JOB_RETRY_DELAY_SECONDS)
+
+        logger.error(
+            "complete_job retries exhausted for job %s; using fallback completion",
+            job_id,
+        )
+        try:
+            async with async_session() as session:
+                await JobService._apply_job_completion(session, job_id, result)
+                await session.commit()
+        except Exception as exc:
+            if last_error is not None:
+                raise last_error from exc
+            raise
+
+        logger.warning("complete_job fallback succeeded for job %s", job_id)
 
     @staticmethod
     async def fail_job(job_id: UUID, error_message: str) -> None:
         """
         Mark a job as failed with an error message.
 
-        Increments attempt_count. If max_attempts is reached, status remains "failed".
-        Otherwise, status is reset to "pending" to allow retry.
+        Does not increment attempt_count; that happens in claim_next_probe_job().
+        If attempt_count is still below max_attempts, status is reset to "pending"
+        for retry. Otherwise, status is set to "failed".
 
         Args:
             job_id: UUID of the job to fail
