@@ -75,7 +75,7 @@ class ScanService:
                 if not paths_to_scan[0]:
                     raise ValueError(f"Watch path not found: {watch_path_id}")
             else:
-                result = await session.execute(select(WatchPath).where(WatchPath.enabled == True))
+                result = await session.execute(select(WatchPath).where(WatchPath.enabled.is_(True)))
                 paths_to_scan = result.scalars().all()
 
             # 2. Discover files from each watch path
@@ -85,7 +85,7 @@ class ScanService:
 
                 try:
                     scanner = VideoScanner()
-                    discovered = await scanner.scan_path(wp.path)
+                    discovered = await scanner.scan_path(wp.path, wp.scan_recursive)
                     discovered_paths.update(df.file_path for df in discovered)
 
                     # 3. Upsert discovered files
