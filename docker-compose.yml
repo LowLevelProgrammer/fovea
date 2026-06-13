@@ -30,7 +30,8 @@ services:
       - "${FOVEA_PORT:-8080}:8080"
     volumes:
       - fovea-assets:/data/fovea/assets
-      - ${MEDIA_PATH:-./media}:/media/videos:ro
+      - ~/lib-a:/media/lib-a:ro
+      - ~/lib-b:/media/lib-b:ro
 
 volumes:
   fovea-db:

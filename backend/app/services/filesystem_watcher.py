@@ -150,6 +150,10 @@ class ScanDebouncer:
             async with self._get_lock(watch_path_id):
                 while True:
                     self._rescan_pending[watch_path_id] = False
+                    logger.info(
+                        "Triggering debounced scan for watch_path_id=%s",
+                        watch_path_id,
+                    )
                     try:
                         result = await ScanService.scan(watch_path_id)
                         logger.info(
