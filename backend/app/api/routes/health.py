@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter
 from sqlalchemy import text
@@ -84,5 +84,5 @@ async def ready() -> dict[str, object]:
         "api": {"status": "running"},
         "database": database_status,
         "migrations": migration_status,
-        "checked_at": datetime.now(UTC).isoformat(),
+        "checked_at": datetime.now(timezone.utc),
     }

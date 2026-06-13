@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Optional
 from uuid import UUID
@@ -60,7 +60,7 @@ class ScanService:
             FileNotFoundError: If a watch path does not exist
             PermissionError: If a watch path is not readable
         """
-        start_time = datetime.now(tz=datetime.now().astimezone().tzinfo)
+        start_time = datetime.now(timezone.utc)
         discovered_paths: set[str] = set()
         watch_paths_scanned = 0
         videos_to_probe: list[Video] = []  # Track ORM objects needing probes
@@ -104,15 +104,15 @@ class ScanService:
                                 file_mtime=df.file_mtime,
                                 fingerprint=df.fingerprint,
                                 status="discovered",
-                                added_at=datetime.now(tz=datetime.now().astimezone().tzinfo),
-                                last_seen_at=datetime.now(tz=datetime.now().astimezone().tzinfo),
+                                added_at=datetime.now(timezone.utc),
+                                last_seen_at=datetime.now(timezone.utc),
                             )
                             session.add(video)
                             videos_to_probe.append(video)  # Track ORM object for probe enqueueing
                         elif existing_video.status == "unavailable":
                             # Scenario 2b: Reappearing file
                             existing_video.status = "discovered"
-                            existing_video.last_seen_at = datetime.now(tz=datetime.now().astimezone().tzinfo)
+                            existing_video.last_seen_at = datetime.now(timezone.utc)
                             existing_video.unavailable_since = None
                             existing_video.file_size = df.file_size
                             existing_video.file_mtime = df.file_mtime
@@ -122,7 +122,7 @@ class ScanService:
                         else:
                             # Scenario 2a: Seen again (available)
                             # Do NOT enqueue a new probe job
-                            existing_video.last_seen_at = datetime.now(tz=datetime.now().astimezone().tzinfo)
+                            existing_video.last_seen_at = datetime.now(timezone.utc)
                             existing_video.file_size = df.file_size
                             existing_video.file_mtime = df.file_mtime
                             existing_video.fingerprint = df.fingerprint
@@ -143,7 +143,7 @@ class ScanService:
                 raise RuntimeError("Failed to upsert videos due to constraint violation")
 
             # 5. Mark videos not found as unavailable (Scenario 3)
-            now = datetime.now(tz=datetime.now().astimezone().tzinfo)
+            now = datetime.now(timezone.utc)
 
             result = await session.execute(
                 select(Video).where(Video.status != "unavailable")
@@ -193,7 +193,7 @@ class ScanService:
                 if not await JobService.has_active_probe_job(video.id):
                     await JobService.create_probe_job(video.id)
 
-        elapsed = (datetime.now(tz=datetime.now().astimezone().tzinfo) - start_time).total_seconds()
+        elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
 
         return ScanResult(
             watch_paths_scanned=watch_paths_scanned,

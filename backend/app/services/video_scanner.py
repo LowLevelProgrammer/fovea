@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 SUPPORTED_EXTENSIONS = {
     ".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".wmv", ".flv", ".mpeg", ".mpg"
@@ -52,7 +52,7 @@ class VideoScanner:
 
             try:
                 stat = file_path.stat()
-                mtime = datetime.fromtimestamp(stat.st_mtime).astimezone()
+                mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
 
                 discovered.append(
                     DiscoveredFile(
