@@ -14,6 +14,12 @@ from app.services.job_service import JobService
 from app.services.video_scanner import VideoScanner
 
 
+class WatchPathNotFoundError(ValueError):
+    """Requested watch path does not exist."""
+
+    pass
+
+
 def _is_under_watch_path(file_path: str, watch_path: str) -> bool:
     file_path_obj = PurePosixPath(file_path)
     watch_path_obj = PurePosixPath(watch_path)
@@ -73,7 +79,9 @@ class ScanService:
                 )
                 paths_to_scan = [result.scalar_one_or_none()]
                 if not paths_to_scan[0]:
-                    raise ValueError(f"Watch path not found: {watch_path_id}")
+                    raise WatchPathNotFoundError(
+                        f"Watch path not found: {watch_path_id}"
+                    )
             else:
                 result = await session.execute(select(WatchPath).where(WatchPath.enabled.is_(True)))
                 paths_to_scan = result.scalars().all()

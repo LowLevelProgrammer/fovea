@@ -16,7 +16,7 @@ from watchdog.observers import Observer
 from app.core.config import get_settings
 from app.db.session import async_session
 from app.models.watch_path import WatchPath
-from app.services.scan_service import ScanService
+from app.services.scan_service import ScanService, WatchPathNotFoundError
 from app.services.video_scanner import SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
@@ -164,6 +164,14 @@ class ScanDebouncer:
                             result.videos_unavailable,
                             result.duration_seconds,
                         )
+
+                    except WatchPathNotFoundError as exc:
+                        logger.warning(
+                            "Watch path disappeared while watcher was running: %s",
+                            exc,
+                        )
+                        break
+
                     except Exception:
                         logger.exception(
                             "Watcher scan failed for watch_path_id=%s",
