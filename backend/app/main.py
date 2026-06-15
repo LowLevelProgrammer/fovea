@@ -13,8 +13,14 @@ from app.services.probe_worker import ProbeWorker
 from app.services.reconciliation_worker import ReconciliationWorker
 from app.services.scan_service import ScanService
 
-logger = logging.getLogger(__name__)
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s %(name)s: %(message)s",
+    force=True,
+)
+
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

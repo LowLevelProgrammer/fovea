@@ -32,6 +32,7 @@ services:
       - fovea-assets:/data/fovea/assets
       - ~/lib-a:/media/lib-a:ro
       - ~/lib-b:/media/lib-b:ro
+      - ~/lib-c:/media/lib-c:ro
 
 volumes:
   fovea-db:
