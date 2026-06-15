@@ -1,12 +1,14 @@
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, status, Header
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 
 from app.api.schemas.video import ScanResultResponse, VideoListResponse, VideoListItem, VideoRead
 from app.db.session import async_session
 from app.models.video import Video
 from app.services.scan_service import ScanService
+from app.core.range_stream import range_stream_response
 
 router = APIRouter(tags=["videos"])
 
@@ -59,18 +61,18 @@ async def list_videos(
     Query params:
     - page (int): Page number, starting at 1 (default 1)
     - limit (int): Items per page, 1-100 (default 24)
-    - status (str, optional): Filter by status (e.g., 'discovered', 'unavailable')
+    - status (str, optional): Filter by status (e.g., 'discovered', 'ready')
 
     Response: Paginated list of videos
     """
     async with async_session() as session:
-        # Build query
-        query = select(Video)
+        # Build query (exclude unavailable videos)
+        query = select(Video).where(Video.status != "unavailable")
         if status:
             query = query.where(Video.status == status)
 
-        # Get total count
-        count_query = select(func.count(Video.id))
+        # Get total count (exclude unavailable videos)
+        count_query = select(func.count(Video.id)).where(Video.status != "unavailable")
         if status:
             count_query = count_query.where(Video.status == status)
         total_result = await session.execute(count_query)
@@ -117,3 +119,37 @@ async def get_video(video_id: UUID) -> VideoRead:
         )
 
     return VideoRead.model_validate(video)
+
+
+@router.get("/videos/{video_id}/stream")
+async def stream_video(
+    video_id: UUID,
+    range: str | None = Header(None, alias="Range"),
+) -> StreamingResponse:
+    """
+    Stream video source file with HTTP Range support.
+
+    Path params:
+    - video_id (UUID): ID of the video
+
+    Headers:
+    - Range (optional): Byte range request header (e.g., 'bytes=0-1000')
+    """
+    async with async_session() as session:
+        result = await session.execute(select(Video).where(Video.id == video_id))
+        video = result.scalar_one_or_none()
+
+    if not video:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Video not found.",
+        )
+
+    if video.status == "unavailable":
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Video is unavailable.",
+        )
+
+    return range_stream_response(video.file_path, range)
+
