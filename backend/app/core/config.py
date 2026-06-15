@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     rename_detection: str = "partial_hash"
     filesystem_watcher_enabled: bool = True
     watch_debounce_seconds: float = 2.0
+    startup_scan_enabled: bool = True
+    reconciliation_enabled: bool = True
+    reconciliation_interval_seconds: float = 21600.0
 
     model_config = SettingsConfigDict(
         env_file=ROOT_DIR / ".env",

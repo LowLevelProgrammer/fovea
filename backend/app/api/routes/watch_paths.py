@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from pathlib import PurePosixPath
 from typing import Optional
 import uuid
@@ -9,7 +11,9 @@ from sqlalchemy.exc import IntegrityError
 from app.api.schemas.watch_path import WatchPathCreate, WatchPathRead, WatchPathUpdate
 from app.db.session import async_session
 from app.models.watch_path import WatchPath
+from app.services.scan_service import ScanService, WatchPathNotFoundError
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["library"])
 
 
@@ -21,6 +25,27 @@ def validate_watch_path(path: str) -> str:
             detail="Watch path must be an absolute container path.",
         )
     return str(parsed)
+
+
+async def _background_initial_scan(watch_path_id: uuid.UUID) -> None:
+    logger.info("Starting background initial scan for watch path ID: %s", watch_path_id)
+    try:
+        result = await ScanService.scan(watch_path_id)
+        logger.info(
+            "Initial scan completed for watch path ID %s (scanned=%d, discovered=%d, unavailable=%d, duration=%.2fs)",
+            watch_path_id,
+            result.watch_paths_scanned,
+            result.videos_discovered,
+            result.videos_unavailable,
+            result.duration_seconds,
+        )
+    except WatchPathNotFoundError:
+        logger.info(
+            "Initial scan skipped because watch path ID %s was deleted before the scan started",
+            watch_path_id,
+        )
+    except Exception:
+        logger.exception("Initial scan failed unexpectedly for watch path ID: %s", watch_path_id)
 
 
 @router.post("", response_model=WatchPathRead, status_code=status.HTTP_201_CREATED)
@@ -43,6 +68,8 @@ async def create_watch_path(payload: WatchPathCreate) -> WatchPathRead:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A watch path with this path already exists.",
             )
+
+    asyncio.create_task(_background_initial_scan(watch_path.id))
 
     return watch_path
 
