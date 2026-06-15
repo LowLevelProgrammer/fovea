@@ -21,7 +21,7 @@ async def setup_db():
     """Clean database tables before each test and clean up connection pool."""
     async with engine.begin() as conn:
         await conn.execute(
-            text("TRUNCATE TABLE jobs, video_probe, videos, watch_paths CASCADE;")
+            text("TRUNCATE TABLE jobs, video_probe, videos, watch_paths, watch_sessions CASCADE;")
         )
     yield
     # Dispose connection pool to ensure fresh connections for next test/event loop

@@ -108,17 +108,30 @@ async def get_video(video_id: UUID) -> VideoRead:
     Response: Full video record
     Errors: 404 if not found
     """
+    from app.models.watch_session import WatchSession
+
     async with async_session() as session:
         result = await session.execute(select(Video).where(Video.id == video_id))
         video = result.scalar_one_or_none()
 
-    if not video:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Video not found.",
-        )
+        if not video:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Video not found.",
+            )
 
-    return VideoRead.model_validate(video)
+        # Query watch progress session for resume position
+        session_result = await session.execute(
+            select(WatchSession).where(
+                WatchSession.video_id == video_id, WatchSession.user_id.is_(None)
+            )
+        )
+        watch_session = session_result.scalar_one_or_none()
+        resume_pos = watch_session.position_seconds if watch_session else None
+
+    video_read = VideoRead.model_validate(video)
+    video_read.resume_position_seconds = resume_pos
+    return video_read
 
 
 @router.get("/videos/{video_id}/stream")

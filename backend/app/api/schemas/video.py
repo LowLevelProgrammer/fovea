@@ -25,6 +25,7 @@ class VideoRead(BaseModel):
     last_watched_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    resume_position_seconds: Optional[float] = None
 
 
 class VideoListItem(BaseModel):
