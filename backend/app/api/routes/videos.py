@@ -127,7 +127,9 @@ async def get_video(video_id: UUID) -> VideoRead:
             )
         )
         watch_session = session_result.scalar_one_or_none()
-        resume_pos = watch_session.position_seconds if watch_session else None
+        resume_pos = None
+        if watch_session and not watch_session.completed:
+                resume_pos = watch_session.position_seconds
 
     video_read = VideoRead.model_validate(video)
     video_read.resume_position_seconds = resume_pos
