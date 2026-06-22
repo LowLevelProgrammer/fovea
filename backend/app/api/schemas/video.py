@@ -3,6 +3,7 @@ from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
+from app.api.schemas.tag import TagRead
 
 
 class VideoRead(BaseModel):
@@ -26,6 +27,8 @@ class VideoRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     resume_position_seconds: Optional[float] = None
+    tags: list[TagRead] = Field(default_factory=list)
+
 
 
 class VideoListItem(BaseModel):

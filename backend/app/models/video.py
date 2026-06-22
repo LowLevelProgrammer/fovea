@@ -3,7 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime, Integer, Text, func, text
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 
@@ -34,3 +34,16 @@ class Video(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+    # Relationships for many-to-many tag associations
+    video_tags_association: Mapped[list["VideoTag"]] = relationship(
+        "VideoTag", back_populates="video", cascade="all, delete-orphan"
+    )
+    tags: Mapped[list["Tag"]] = relationship(
+        "Tag",
+        secondary="video_tags",
+        back_populates="videos",
+        viewonly=True,
+        lazy="selectin",
+    )
+

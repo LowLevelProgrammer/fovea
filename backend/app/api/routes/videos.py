@@ -2,11 +2,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status, Header
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, select, or_, case, exists
+from sqlalchemy.orm import selectinload
 
 from app.api.schemas.video import ScanResultResponse, VideoListResponse, VideoListItem, VideoRead
+from app.api.schemas.tag import VideoTagUpdate
 from app.db.session import async_session
 from app.models.video import Video
+from app.models.tag import Tag, VideoTag
 from app.services.scan_service import ScanService
 from app.core.range_stream import range_stream_response
 
@@ -111,7 +114,9 @@ async def get_video(video_id: UUID) -> VideoRead:
     from app.models.watch_session import WatchSession
 
     async with async_session() as session:
-        result = await session.execute(select(Video).where(Video.id == video_id))
+        result = await session.execute(
+            select(Video).options(selectinload(Video.tags)).where(Video.id == video_id)
+        )
         video = result.scalar_one_or_none()
 
         if not video:
@@ -167,4 +172,120 @@ async def stream_video(
         )
 
     return range_stream_response(video.file_path, range)
+
+
+@router.get("/search", response_model=list[VideoListItem])
+async def search_videos(q: str = Query(..., min_length=1)) -> list[VideoListItem]:
+    """
+    Search videos by title, title_override, filename, or associated tags case-insensitively.
+    Orders by basic relevance (title_override match first, then title, then tag match, then filename).
+    """
+    search_pattern = f"%{q.lower()}%"
+    has_tag_match = (
+        select(1)
+        .select_from(VideoTag)
+        .join(Tag, Tag.id == VideoTag.tag_id)
+        .where(
+            VideoTag.video_id == Video.id,
+            func.lower(Tag.name).like(search_pattern)
+        )
+        .exists()
+    )
+    score = case(
+        (func.lower(Video.title_override).like(search_pattern), 4),
+        (func.lower(Video.title).like(search_pattern), 3),
+        (has_tag_match, 2),
+        (func.lower(Video.file_path).like(search_pattern), 1),
+        else_=0
+    )
+
+    async with async_session() as session:
+        stmt = (
+            select(Video)
+            .where(Video.status != "unavailable", score > 0)
+            .order_by(score.desc(), Video.title.asc())
+        )
+        result = await session.execute(stmt)
+        videos = result.scalars().all()
+
+    items = [VideoListItem.model_validate(v) for v in videos]
+    return items
+
+
+
+@router.patch("/videos/{video_id}", response_model=VideoRead)
+async def update_video_tags(video_id: UUID, payload: VideoTagUpdate) -> VideoRead:
+    """
+    Assign or remove tags for a video manually.
+    """
+    from app.models.watch_session import WatchSession
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Video).options(selectinload(Video.tags)).where(Video.id == video_id)
+        )
+        video = result.scalar_one_or_none()
+        if not video:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Video not found.",
+            )
+
+        target_tags = []
+        for tag_name in payload.tags:
+            tag_name_clean = tag_name.strip()
+            if not tag_name_clean:
+                continue
+
+            tag_stmt = select(Tag).where(func.lower(Tag.name) == tag_name_clean.lower())
+            tag_result = await session.execute(tag_stmt)
+            tag = tag_result.scalar_one_or_none()
+
+            if not tag:
+                tag = Tag(name=tag_name_clean)
+                session.add(tag)
+                await session.flush()
+
+            if tag not in target_tags:
+                target_tags.append(tag)
+
+        assoc_stmt = select(VideoTag).where(VideoTag.video_id == video_id)
+        assoc_result = await session.execute(assoc_stmt)
+        existing_assocs = assoc_result.scalars().all()
+
+        target_tag_ids = {tag.id for tag in target_tags}
+        existing_assoc_by_tag_id = {assoc.tag_id: assoc for assoc in existing_assocs}
+
+        for tag_id, assoc in list(existing_assoc_by_tag_id.items()):
+            if tag_id in target_tag_ids:
+                if assoc.source != "manual":
+                    assoc.source = "manual"
+                    session.add(assoc)
+            else:
+                if assoc.source == "manual":
+                    await session.delete(assoc)
+
+        for tag in target_tags:
+            if tag.id not in existing_assoc_by_tag_id:
+                new_assoc = VideoTag(video_id=video_id, tag_id=tag.id, source="manual")
+                session.add(new_assoc)
+
+        await session.commit()
+
+        session_result = await session.execute(
+            select(WatchSession).where(
+                WatchSession.video_id == video_id, WatchSession.user_id.is_(None)
+            )
+        )
+        watch_session = session_result.scalar_one_or_none()
+        resume_pos = None
+        if watch_session and not watch_session.completed:
+            resume_pos = watch_session.position_seconds
+
+        await session.refresh(video)
+
+    video_read = VideoRead.model_validate(video)
+    video_read.resume_position_seconds = resume_pos
+    return video_read
+
 

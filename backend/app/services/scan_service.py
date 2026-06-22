@@ -5,12 +5,13 @@ from pathlib import PurePosixPath
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 
 from app.db.session import async_session
 from app.models.watch_path import WatchPath
 from app.models.video import Video
+from app.models.tag import Tag, VideoTag
 from app.services.job_service import JobService
 from app.services.video_scanner import VideoScanner
 
@@ -29,6 +30,70 @@ def _is_under_watch_path(file_path: str, watch_path: str) -> bool:
         file_path_obj == watch_path_obj
         or watch_path_obj in file_path_obj.parents
     )
+
+
+async def _apply_auto_tags(session, video: Video, file_path: str, watch_root: str) -> None:
+    # TODO: Scan-performance optimization
+    # This method is currently called sequentially for every video during a scan, causing a severe 
+    # N+1 query problem (executing at least 2 database queries per file).
+    # After discovery features are functional, this should be refactored to bulk-process tags
+    # outside of the file-by-file ingestion loop.
+    try:
+        rel_path = PurePosixPath(file_path).relative_to(PurePosixPath(watch_root))
+        folders = [part for part in rel_path.parent.parts if part and part != "."]
+    except ValueError:
+        folders = []
+
+    desired_folders = {f.strip() for f in folders if f.strip()}
+
+    stmt = select(VideoTag).where(VideoTag.video_id == video.id)
+    result = await session.execute(stmt)
+    existing_associations = result.scalars().all()
+
+    assoc_by_tag_id = {assoc.tag_id: assoc for assoc in existing_associations}
+
+    if assoc_by_tag_id:
+        tag_stmt = select(Tag).where(Tag.id.in_(assoc_by_tag_id.keys()))
+        tag_result = await session.execute(tag_stmt)
+        tags_by_id = {tag.id: tag for tag in tag_result.scalars().all()}
+    else:
+        tags_by_id = {}
+
+    auto_assocs_to_remove = []
+    associated_folder_names_lower = set()
+
+    for tag_id, assoc in assoc_by_tag_id.items():
+        tag = tags_by_id.get(tag_id)
+        if not tag:
+            continue
+        tag_name_lower = tag.name.lower()
+        if assoc.source == "auto":
+            if tag_name_lower not in {f.lower() for f in desired_folders}:
+                auto_assocs_to_remove.append(assoc)
+            else:
+                associated_folder_names_lower.add(tag_name_lower)
+        else:
+            associated_folder_names_lower.add(tag_name_lower)
+
+    for assoc in auto_assocs_to_remove:
+        await session.delete(assoc)
+
+    for folder in desired_folders:
+        folder_lower = folder.lower()
+        if folder_lower in associated_folder_names_lower:
+            continue
+
+        tag_stmt = select(Tag).where(func.lower(Tag.name) == folder_lower)
+        tag_result = await session.execute(tag_stmt)
+        tag = tag_result.scalar_one_or_none()
+
+        if not tag:
+            tag = Tag(name=folder)
+            session.add(tag)
+            await session.flush()
+
+        new_assoc = VideoTag(video_id=video.id, tag_id=tag.id, source="auto")
+        session.add(new_assoc)
 
 
 @dataclass
@@ -126,6 +191,8 @@ class ScanService:
                                     last_seen_at=datetime.now(timezone.utc),
                                 )
                                 session.add(video)
+                                await session.flush()
+                                await _apply_auto_tags(session, video, df.file_path, wp.path)
                                 videos_to_probe.append(video)  # Track ORM object for probe enqueueing
                             elif existing_video.status == "unavailable":
                                 # Scenario 2b: Reappearing file
@@ -136,6 +203,7 @@ class ScanService:
                                 existing_video.file_mtime = df.file_mtime
                                 existing_video.fingerprint = df.fingerprint
                                 session.add(existing_video)
+                                await _apply_auto_tags(session, existing_video, df.file_path, wp.path)
                                 videos_to_probe.append(existing_video)  # Track ORM object for probe enqueueing
                             else:
                                 # Scenario 2a: Seen again (available)
@@ -145,6 +213,8 @@ class ScanService:
                                 existing_video.file_mtime = df.file_mtime
                                 existing_video.fingerprint = df.fingerprint
                                 session.add(existing_video)
+                                await _apply_auto_tags(session, existing_video, df.file_path, wp.path)
+
 
                         watch_paths_scanned += 1
 
