@@ -124,3 +124,88 @@ async def test_homepage_feed(db_session, client):
     assert ra_section["items"][1]["id"] == str(v2.id)
     assert ra_section["items"][2]["id"] == str(v3.id)
     assert ra_section["items"][3]["id"] == str(v4.id)
+
+@pytest.mark.anyio
+async def test_recommendation_feed(db_session, client):
+    from app.models.tag import Tag, VideoTag
+    import random
+    
+    # Need sufficient videos to test random injection and duplication logic
+    now = datetime.now(timezone.utc)
+    videos = []
+    for i in range(40):
+        v = Video(
+            id=uuid.uuid4(),
+            file_path=f"/media/lib-r/rec{i}.mp4",
+            title=f"Rec {i}",
+            file_size=1024,
+            file_mtime=now,
+            status="ready",
+            added_at=now - timedelta(days=20 if i < 5 else 10),
+            last_seen_at=now,
+            watch_count=0
+        )
+        videos.append(v)
+    db_session.add_all(videos)
+    await db_session.flush()
+
+    # Create a tag
+    tag_scifi = Tag(name="sci-fi")
+    tag_action = Tag(name="action")
+    db_session.add_all([tag_scifi, tag_action])
+    await db_session.flush()
+
+    # User watched videos[0] and videos[1], which has sci-fi and action tags
+    ws1 = WatchSession(id=uuid.uuid4(), video_id=videos[0].id, user_id=None, position_seconds=100, duration_seconds=1000, completed=True)
+    ws2 = WatchSession(id=uuid.uuid4(), video_id=videos[1].id, user_id=None, position_seconds=100, duration_seconds=1000, completed=False)
+    db_session.add_all([ws1, ws2])
+    
+    # Tag videos
+    db_session.add_all([
+        VideoTag(video_id=videos[0].id, tag_id=tag_scifi.id, source="auto"),
+        VideoTag(video_id=videos[1].id, tag_id=tag_action.id, source="auto"),
+        VideoTag(video_id=videos[2].id, tag_id=tag_scifi.id, source="auto"),
+        VideoTag(video_id=videos[3].id, tag_id=tag_action.id, source="auto"),
+        VideoTag(video_id=videos[4].id, tag_id=tag_scifi.id, source="auto"),
+    ])
+    await db_session.commit()
+
+    # Fetch feed
+    response = await client.get("/api/v1/feed/home")
+    assert response.status_code == 200
+    data = response.json()
+    
+    sections = data["sections"]
+    
+    rec_section = next((s for s in sections if s["type"] == "recommended"), None)
+    assert rec_section is not None
+    
+    items = rec_section["items"]
+    # We expect some items. limit=12. 
+    # Approx 20% random injection = 2 random items (max(1, int(12*0.2)) = 2)
+    # The remaining 10 are filled. We only have 13 other videos, so it should fill it up.
+    
+    # Check that watched videos (videos[0], videos[1]) are EXCLUDED from Recommended For You
+    item_ids = [i["id"] for i in items]
+    assert str(videos[0].id) not in item_ids
+    assert str(videos[1].id) not in item_ids
+    
+    # Check that recommendation reasons are present
+    reasons = [i["recommendation_reason"] for i in items if i.get("recommendation_reason")]
+    assert len(reasons) == len(items)
+    
+    # At least some should be Shared tag
+    assert any("Shared tag" in r for r in reasons)
+    # At least some should be Random pick
+    assert any("Random pick" in r for r in reasons)
+    
+    # Random discovery section should also exist and have random picks
+    random_section = next((s for s in sections if s["type"] == "random"), None)
+    assert random_section is not None
+    assert len(random_section["items"]) > 0
+    assert all(i["recommendation_reason"] == "Random pick" for i in random_section["items"])
+    
+    # Ensure no duplicates between random discovery and recommended
+    rec_ids = set(item_ids)
+    rand_ids = set(i["id"] for i in random_section["items"])
+    assert rec_ids.isdisjoint(rand_ids), "Random discovery should not duplicate items from recommended"

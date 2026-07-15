@@ -5,7 +5,7 @@ from app.api.schemas.video import VideoListItem
 class FeedSection(BaseModel):
     id: str
     title: str
-    type: Literal["recently_added", "continue_watching", "tag", "recommended"]
+    type: Literal["recently_added", "continue_watching", "frequently_watched", "recommended", "random"]
     items: list[VideoListItem]
 
 class FeedResponse(BaseModel):

@@ -43,6 +43,7 @@ class VideoListItem(BaseModel):
     status: str
     added_at: datetime
     last_seen_at: datetime
+    recommendation_reason: Optional[str] = None
 
 
 class ScanResultResponse(BaseModel):
