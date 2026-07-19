@@ -105,18 +105,23 @@ Used in feeds, search results, and sidebars.
 **Tradeoff:** Exposing `file_path` aids debugging but leaks filesystem layout.  
 **Proposal:** Include in detail view only; omit from summaries. Settings-gated in production.
 
-### 2.3 `FeedSection`
+### 2.3 `HomepageFeed`
+
+The homepage returns a separate Continue Watching row and one paginated ranked
+recommendation stream. Recommendation reasons are explanations, not sections.
 
 ```json
 {
-  "section": "recommended",
-  "title": "Recommended for you",
-  "items": [ /* VideoSummary[] */ ],
-  "meta": {
-    "random_ratio_applied": 0.2,
-    "generated_at": "2026-06-07T12:00:00Z"
+  "continue_watching": [],
+  "recommendations": {
+    "items": [],
+    "offset": 0,
+    "limit": 24,
+    "total": 0,
+    "has_more": false
   }
 }
+```
 ```
 
 ### 2.4 `WatchSession`
@@ -200,61 +205,34 @@ running. The payload reports degraded readiness:
 
 #### `GET /feed/home`
 
-Returns all homepage sections in one request.
+Returns the Continue Watching row and one page from the ranked discovery feed.
 
 **Query parameters:**
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `limit` | int | 24 | Items per section |
-| `exclude` | string | — | Comma-separated video IDs to exclude (dedup across sections) |
+| `offset` | int | 0 | Zero-based position in the ranked recommendation feed |
+| `limit` | int | 24 | Recommendation items to return (1–100) |
 
 **Response:**
 
 ```json
 {
-  "sections": [
-    {
-      "section": "continue_watching",
-      "title": "Continue watching",
-      "items": []
-    },
-    {
-      "section": "recently_added",
-      "title": "Recently added",
-      "items": []
-    },
-    {
-      "section": "frequently_watched",
-      "title": "Frequently watched",
-      "items": []
-    },
-    {
-      "section": "recommended",
-      "title": "Recommended for you",
-      "items": []
-    },
-    {
-      "section": "random",
-      "title": "Discover something new",
-      "items": []
-    }
-  ],
-  "generated_at": "2026-06-07T12:00:00Z"
+  "continue_watching": [],
+  "recommendations": {
+    "items": [],
+    "offset": 0,
+    "limit": 24,
+    "total": 0,
+    "has_more": false
+  }
 }
 ```
 
 **Notes:**
 
-- `continue_watching` is a proposed addition (see PRD).
-- `recommended` section internally applies ~20% random injection.
-- `random` section is explicitly 100% random for exploration.
-
-#### `GET /feed/{section}`
-
-Fetch a single section (`recently_added`, `frequently_watched`, `recommended`, `random`, `continue_watching`).
-
-**Query:** `page`, `limit`
+- Recommendation reasons explain why an item ranked; they are not categories.
+- The client requests later pages by increasing `offset`.
 
 ---
 

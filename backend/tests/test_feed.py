@@ -107,33 +107,26 @@ async def test_homepage_feed(db_session, client):
     assert response.status_code == 200
     data = response.json()
 
-    sections = data["sections"]
-    assert len(sections) == 2
-
-    cw_section = next(s for s in sections if s["id"] == "continue_watching")
+    continue_watching = data["continue_watching"]
     # Only v1 should be in continue watching. 
     # ws2 is completed, ws_unavail video is unavailable, ws3 has position_seconds=0
-    assert len(cw_section["items"]) == 1
-    assert cw_section["items"][0]["id"] == str(v1.id)
-    assert cw_section["items"][0]["resume_position_seconds"] == 120.5
-    assert cw_section["items"][0]["duration_seconds"] == 3600.0
-    assert cw_section["items"][0]["completed"] is False
+    assert len(continue_watching) == 1
+    assert continue_watching[0]["id"] == str(v1.id)
+    assert continue_watching[0]["resume_position_seconds"] == 120.5
+    assert continue_watching[0]["duration_seconds"] == 3600.0
+    assert continue_watching[0]["completed"] is False
 
-    ra_section = next(s for s in sections if s["id"] == "recently_added")
-    # All ready videos should be in recently added, ordered by added_at desc. 
-    # v_unavailable should be excluded.
-    assert len(ra_section["items"]) == 4
-    assert ra_section["items"][0]["id"] == str(v1.id)
-    assert ra_section["items"][1]["id"] == str(v2.id)
-    assert ra_section["items"][2]["id"] == str(v3.id)
-    assert ra_section["items"][3]["id"] == str(v4.id)
-    completed_item = next(item for item in ra_section["items"] if item["id"] == str(v2.id))
+    recommendations = data["recommendations"]
+    assert recommendations["total"] == 3
+    assert recommendations["has_more"] is False
+    item_ids = {item["id"] for item in recommendations["items"]}
+    assert item_ids == {str(v2.id), str(v3.id), str(v4.id)}
+    completed_item = next(item for item in recommendations["items"] if item["id"] == str(v2.id))
     assert completed_item["completed"] is True
 
 @pytest.mark.anyio
 async def test_recommendation_feed(db_session, client):
     from app.models.tag import Tag, VideoTag
-    import random
     
     # Need sufficient videos to test random injection and duplication logic
     now = datetime.now(timezone.utc)
@@ -176,41 +169,28 @@ async def test_recommendation_feed(db_session, client):
     await db_session.commit()
 
     # Fetch feed
-    response = await client.get("/api/v1/feed/home")
+    response = await client.get("/api/v1/feed/home?offset=0&limit=12")
     assert response.status_code == 200
     data = response.json()
     
-    sections = data["sections"]
-    
-    rec_section = next((s for s in sections if s["type"] == "recommended"), None)
-    assert rec_section is not None
-    
-    items = rec_section["items"]
-    # We expect some items. limit=12. 
-    # Approx 20% random injection = 2 random items (max(1, int(12*0.2)) = 2)
-    # The remaining 10 are filled. We only have 13 other videos, so it should fill it up.
-    
-    # Check that watched videos (videos[0], videos[1]) are EXCLUDED from Recommended For You
+    page = data["recommendations"]
+    items = page["items"]
+    assert page["total"] == 39  # The in-progress video is held in Continue Watching.
+    assert page["has_more"] is True
     item_ids = [i["id"] for i in items]
-    assert str(videos[0].id) not in item_ids
     assert str(videos[1].id) not in item_ids
     
     # Check that recommendation reasons are present
     reasons = [i["recommendation_reason"] for i in items if i.get("recommendation_reason")]
     assert len(reasons) == len(items)
     
-    # At least some should be Shared tag
+    # Interest profile and exploration reasons are explanation labels, not sections.
     assert any("Shared tag" in r for r in reasons)
-    # At least some should be Random pick
-    assert any("Random pick" in r for r in reasons)
-    
-    # Random discovery section should also exist and have random picks
-    random_section = next((s for s in sections if s["type"] == "random"), None)
-    assert random_section is not None
-    assert len(random_section["items"]) > 0
-    assert all(i["recommendation_reason"] == "Random pick" for i in random_section["items"])
-    
-    # Ensure no duplicates between random discovery and recommended
-    rec_ids = set(item_ids)
-    rand_ids = set(i["id"] for i in random_section["items"])
-    assert rec_ids.isdisjoint(rand_ids), "Random discovery should not duplicate items from recommended"
+    assert len(item_ids) == len(set(item_ids))
+
+    second_page = await client.get("/api/v1/feed/home?offset=12&limit=12")
+    second_item_ids = {item["id"] for item in second_page.json()["recommendations"]["items"]}
+    assert not set(item_ids).intersection(second_item_ids)
+
+    repeated_page = await client.get("/api/v1/feed/home?offset=0&limit=12")
+    assert [item["id"] for item in repeated_page.json()["recommendations"]["items"]] == item_ids

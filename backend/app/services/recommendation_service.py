@@ -1,128 +1,125 @@
+from dataclasses import dataclass
 from typing import Optional
 from uuid import UUID
-from sqlalchemy import select, func, case, desc
-from sqlalchemy.orm import selectinload
-from app.models.video import Video
+
+from sqlalchemy import case, func, select
+
 from app.models.tag import Tag, VideoTag
+from app.models.video import Video
 from app.models.watch_session import WatchSession
 
+
+@dataclass(frozen=True)
+class RankedVideo:
+    video: Video
+    reason: str
+    score: float
+
+
 class RecommendationService:
-    @staticmethod
-    async def get_frequently_watched(session, limit: int = 12, exclude_ids: Optional[set[UUID]] = None) -> list[tuple[Video, str]]:
-        stmt = select(Video).where(Video.status != "unavailable", Video.watch_count > 0)
-        if exclude_ids:
-            stmt = stmt.where(Video.id.notin_(exclude_ids))
-        
-        stmt = stmt.order_by(Video.watch_count.desc(), Video.last_watched_at.desc().nulls_last()).limit(limit)
-        result = await session.execute(stmt)
-        videos = result.scalars().all()
-        return [(v, "Popular in your library") for v in videos]
+    """Ranks discovery candidates from watch history and library metadata."""
 
     @staticmethod
-    async def get_random_discovery(session, limit: int = 12, exclude_ids: Optional[set[UUID]] = None) -> list[tuple[Video, str]]:
-        # Prefer unwatched or low-watch-count videos
-        # Random sort using random()
+    async def get_continue_watching(session, limit: int = 12) -> list[Video]:
+        stmt = (
+            select(Video)
+            .join(WatchSession, WatchSession.video_id == Video.id)
+            .where(
+                Video.status != "unavailable",
+                WatchSession.user_id.is_(None),
+                WatchSession.completed.is_(False),
+                WatchSession.position_seconds > 0,
+            )
+            .order_by(WatchSession.updated_at.desc(), Video.id.asc())
+            .limit(limit)
+        )
+        return (await session.execute(stmt)).scalars().all()
+
+    @staticmethod
+    async def get_ranked_feed(
+        session,
+        limit: int = 24,
+        offset: int = 0,
+        exclude_ids: Optional[set[UUID]] = None,
+    ) -> tuple[list[RankedVideo], int]:
+        """Return a stable page from one ranked discovery stream.
+
+        Scores combine tag affinity from watch history, watch count, recency,
+        and a stable exploration value. Candidates are fully ranked before
+        slicing so offsets address one consistent ordered stream.
+        """
+        excluded = exclude_ids or set()
         stmt = select(Video).where(Video.status != "unavailable")
-        if exclude_ids:
-            stmt = stmt.where(Video.id.notin_(exclude_ids))
-            
-        # Order by unwatched first, then low watch count, then random
-        stmt = stmt.order_by(
-            Video.watch_count.asc(),
-            func.random()
-        ).limit(limit)
-        
-        result = await session.execute(stmt)
-        videos = result.scalars().all()
-        return [(v, "Random pick") for v in videos]
+        if excluded:
+            stmt = stmt.where(Video.id.notin_(excluded))
+        candidates = (await session.execute(stmt)).scalars().all()
+
+        tag_scores, tag_names = await RecommendationService._watch_tag_profile(session)
+        recency_scores, recently_added_ids = RecommendationService._recency_scores(candidates)
+        ranked: list[RankedVideo] = []
+        for video in candidates:
+            tag_score = tag_scores.get(video.id, 0.0)
+            popularity_score = min(video.watch_count, 10) * 0.15
+            recency_score = recency_scores[video.id]
+            exploration_score = (int(video.id.hex[-6:], 16) % 1000) / 10000
+            score = tag_score * 3 + popularity_score + recency_score + exploration_score
+
+            if tag_score:
+                reason = f"Shared tag: {tag_names[video.id]}"
+            elif video.id in recently_added_ids:
+                reason = "Recently added"
+            elif video.watch_count > 0:
+                reason = "Popular in your library"
+            else:
+                reason = "Random discovery"
+            ranked.append(RankedVideo(video=video, reason=reason, score=score))
+
+        ranked.sort(
+            key=lambda item: (-item.score, -item.video.added_at.timestamp(), str(item.video.id))
+        )
+        return ranked[offset : offset + limit], len(ranked)
 
     @staticmethod
-    async def get_recommended_for_you(session, limit: int = 12, exclude_ids: Optional[set[UUID]] = None) -> list[tuple[Video, str]]:
-        import random
-        random_limit = max(1, int(limit * 0.2))
-        rec_limit = limit - random_limit
+    def _recency_scores(candidates: list[Video]) -> tuple[dict[UUID, float], set[UUID]]:
+        """Assign a deterministic recency boost from persisted add order."""
+        recent_first = sorted(candidates, key=lambda video: (-video.added_at.timestamp(), str(video.id)))
+        candidate_count = len(recent_first)
+        if candidate_count == 0:
+            return {}, set()
 
-        # Get watched videos to exclude them from recommendations
-        watched_stmt = select(WatchSession.video_id).distinct()
-        watched_result = await session.execute(watched_stmt)
-        watched_video_ids = {row[0] for row in watched_result.all()}
-        
-        # Get tags from videos watched recently or completed
+        scores = {
+            video.id: 0.75 * (candidate_count - index) / candidate_count
+            for index, video in enumerate(recent_first)
+        }
+        recently_added_ids = {video.id for video in recent_first[: min(12, candidate_count)]}
+        return scores, recently_added_ids
+
+    @staticmethod
+    async def _watch_tag_profile(session) -> tuple[dict[UUID, float], dict[UUID, str]]:
         profile_stmt = (
-            select(VideoTag.tag_id, Tag.name, func.sum(
-                case(
-                    (WatchSession.completed.is_(True), 3),
-                    else_=1
-                )
-            ).label("weight"))
+            select(
+                VideoTag.tag_id,
+                func.sum(case((WatchSession.completed.is_(True), 3), else_=1)).label("weight"),
+            )
             .select_from(WatchSession)
             .join(VideoTag, VideoTag.video_id == WatchSession.video_id)
-            .join(Tag, Tag.id == VideoTag.tag_id)
-            .group_by(VideoTag.tag_id, Tag.name)
-            .order_by(desc("weight"))
-            .limit(10)
+            .where(WatchSession.user_id.is_(None))
+            .group_by(VideoTag.tag_id)
         )
-        profile_result = await session.execute(profile_stmt)
-        top_tags = profile_result.all()
-        
-        recs = []
-        rec_exclude = set(exclude_ids) if exclude_ids else set()
-        # Exclude videos that generated the profile (watched videos)
-        rec_exclude.update(watched_video_ids)
+        profile_rows = (await session.execute(profile_stmt)).all()
+        tag_weights = {row.tag_id: float(row.weight) for row in profile_rows}
+        if not tag_weights:
+            return {}, {}
 
-        if top_tags:
-            tag_ids = [t.tag_id for t in top_tags]
-            
-            # Subquery to calculate shared tag score and get a shared tag name
-            tag_score_subq = (
-                select(
-                    VideoTag.video_id, 
-                    func.count().label("tag_score"),
-                    func.max(Tag.name).label("shared_tag_name")
-                )
-                .join(Tag, Tag.id == VideoTag.tag_id)
-                .where(VideoTag.tag_id.in_(tag_ids))
-                .group_by(VideoTag.video_id)
-                .subquery()
-            )
-
-            stmt = (
-                select(Video, tag_score_subq.c.tag_score, tag_score_subq.c.shared_tag_name)
-                .join(tag_score_subq, tag_score_subq.c.video_id == Video.id)
-                .where(Video.status != "unavailable")
-            )
-            if rec_exclude:
-                stmt = stmt.where(Video.id.notin_(rec_exclude))
-            
-            stmt = stmt.order_by(
-                tag_score_subq.c.tag_score.desc(),
-                Video.watch_count.asc()
-            ).limit(rec_limit)
-            
-            result = await session.execute(stmt)
-            scored_videos = result.all()
-            
-            for video, tag_score, shared_tag_name in scored_videos:
-                if shared_tag_name:
-                    reason = f"Shared tag: {shared_tag_name}"
-                elif video.watch_count == 0:
-                    reason = "Unwatched boost"
-                else:
-                    reason = "Recommended for you"
-                    
-                recs.append((video, reason))
-                rec_exclude.add(video.id)
-                
-        # Inject 20% random
-        random_recs = await RecommendationService.get_random_discovery(session, random_limit, rec_exclude)
-        recs.extend(random_recs)
-        rec_exclude.update([v.id for v, _ in random_recs])
-        
-        # Fill the rest with random if we didn't meet the limit
-        remaining_limit = limit - len(recs)
-        if remaining_limit > 0:
-            extra_random_recs = await RecommendationService.get_random_discovery(session, remaining_limit, rec_exclude)
-            recs.extend(extra_random_recs)
-            
-        random.shuffle(recs)
-        return recs
+        candidate_tags_stmt = (
+            select(VideoTag.video_id, Tag.name, VideoTag.tag_id)
+            .join(Tag, Tag.id == VideoTag.tag_id)
+            .where(VideoTag.tag_id.in_(tag_weights))
+            .order_by(Tag.name.asc(), VideoTag.video_id.asc())
+        )
+        scores: dict[UUID, float] = {}
+        names: dict[UUID, str] = {}
+        for row in (await session.execute(candidate_tags_stmt)).all():
+            scores[row.video_id] = scores.get(row.video_id, 0.0) + tag_weights[row.tag_id]
+            names.setdefault(row.video_id, row.name)
+        return scores, names

@@ -277,7 +277,7 @@ body {
   margin-top: 8px;
 }
 
-.feed-page { display: flex; flex-direction: column; gap: 36px; }
+.discovery-page { display: flex; flex-direction: column; gap: 36px; }
 
 .feed-section { min-width: 0; }
 
@@ -292,6 +292,14 @@ body {
   padding-bottom: 8px;
   scrollbar-color: var(--card-border) transparent;
 }
+
+.discovery-grid {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+}
+
+.feed-sentinel { min-height: 72px; }
 
 .search-bar {
   align-items: center;

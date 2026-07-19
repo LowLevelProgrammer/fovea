@@ -59,15 +59,17 @@ export type VideoRead = {
   resume_position_seconds: number | null;
 };
 
-export type FeedSection = {
-  id: string;
-  title: string;
-  type: string;
+export type RankedFeedPage = {
   items: VideoListItem[];
+  offset: number;
+  limit: number;
+  total: number;
+  has_more: boolean;
 };
 
 export type FeedResponse = {
-  sections: FeedSection[];
+  continue_watching: VideoListItem[];
+  recommendations: RankedFeedPage;
 };
 
 export type Tag = {
