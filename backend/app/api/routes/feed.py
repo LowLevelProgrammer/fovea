@@ -122,4 +122,33 @@ async def get_homepage_feed() -> FeedResponse:
                     ],
                 )
             )
+        # The feed is the only discovery response that knows a card is being
+        # shown in a watch context. Attach the existing watch-session data so
+        # clients can render progress without issuing one request per card.
+        video_ids = [item.id for section in sections for item in section.items]
+        if video_ids:
+            watch_result = await session.execute(
+                select(WatchSession).where(
+                    WatchSession.video_id.in_(video_ids),
+                    WatchSession.user_id.is_(None),
+                )
+            )
+            sessions_by_video_id = {
+                watch_session.video_id: watch_session
+                for watch_session in watch_result.scalars().all()
+            }
+            for section in sections:
+                section.items = [
+                    item.model_copy(
+                        update={
+                            "duration_seconds": watch_session.duration_seconds,
+                            "resume_position_seconds": watch_session.position_seconds,
+                            "completed": watch_session.completed,
+                        }
+                    )
+                    if (watch_session := sessions_by_video_id.get(item.id))
+                    else item
+                    for item in section.items
+                ]
+
     return FeedResponse(sections=sections)

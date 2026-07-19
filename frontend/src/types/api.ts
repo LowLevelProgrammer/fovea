@@ -25,6 +25,11 @@ export type VideoListItem = {
   status: string;
   added_at: string;
   last_seen_at: string;
+  duration_seconds?: number | null;
+  thumbnail_url?: string | null;
+  resume_position_seconds?: number | null;
+  completed?: boolean | null;
+  recommendation_reason?: string | null;
 };
 
 export type VideoListResponse = {
@@ -52,4 +57,22 @@ export type VideoRead = {
   created_at: string;
   updated_at: string;
   resume_position_seconds: number | null;
+};
+
+export type FeedSection = {
+  id: string;
+  title: string;
+  type: string;
+  items: VideoListItem[];
+};
+
+export type FeedResponse = {
+  sections: FeedSection[];
+};
+
+export type Tag = {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
 };

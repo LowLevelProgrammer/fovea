@@ -52,6 +52,27 @@ body {
   justify-content: space-between;
 }
 
+.app-nav {
+  display: flex;
+  gap: 4px;
+}
+
+.app-nav button {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.875rem;
+  padding: 8px 10px;
+}
+
+.app-nav button:hover, .app-nav button.active {
+  background: var(--accent-glow);
+  color: var(--text-main);
+}
+
 .logo-container {
   display: flex;
   align-items: center;
@@ -177,6 +198,29 @@ body {
   position: relative;
 }
 
+.card-thumbnail img {
+  width: 100%;
+  height: 100%;
+  inset: 0;
+  object-fit: cover;
+  position: absolute;
+}
+
+.watch-progress {
+  background: rgba(15, 23, 42, 0.85);
+  bottom: 0;
+  height: 4px;
+  left: 0;
+  position: absolute;
+  width: 100%;
+}
+
+.watch-progress span {
+  background: var(--accent);
+  display: block;
+  height: 100%;
+}
+
 .play-icon {
   font-size: 2rem;
   opacity: 0.6;
@@ -220,6 +264,57 @@ body {
   font-size: 0.8125rem;
   color: var(--text-muted);
 }
+
+.completion-state, .recommendation-reason {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.completion-state { color: var(--green); }
+
+.recommendation-reason {
+  line-height: 1.4;
+  margin-top: 8px;
+}
+
+.feed-page { display: flex; flex-direction: column; gap: 36px; }
+
+.feed-section { min-width: 0; }
+
+.feed-section-title { font-size: 1.25rem; margin-bottom: 14px; }
+
+.feed-row {
+  display: grid;
+  gap: 16px;
+  grid-auto-columns: minmax(220px, 280px);
+  grid-auto-flow: column;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  scrollbar-color: var(--card-border) transparent;
+}
+
+.search-bar {
+  align-items: center;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  display: flex;
+  gap: 10px;
+  margin-bottom: 24px;
+  max-width: 620px;
+  padding: 0 14px;
+}
+
+.search-bar:focus-within { border-color: var(--accent); }
+.search-bar input { background: transparent; border: 0; color: var(--text-main); font: inherit; outline: 0; padding: 13px 0; width: 100%; }
+.search-empty { margin-top: 24px; }
+.search-results { margin-top: 24px; }
+
+.tag-list { display: flex; flex-wrap: wrap; gap: 10px; }
+.tag-chip { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 999px; color: var(--text-main); cursor: pointer; font: inherit; padding: 9px 14px; }
+.tag-chip:hover { border-color: var(--accent); color: #fff; }
+
+.sr-only { height: 1px; margin: -1px; overflow: hidden; position: absolute; width: 1px; clip: rect(0, 0, 0, 0); }
 
 /* Badges */
 .badge {
@@ -392,4 +487,7 @@ body {
   .app-main {
     padding: 16px;
   }
+  .app-header { flex-wrap: wrap; gap: 10px; }
+  .app-nav { order: 3; width: 100%; overflow-x: auto; }
+  .health-status { margin-left: auto; }
 }

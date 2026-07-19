@@ -44,6 +44,11 @@ class VideoListItem(BaseModel):
     added_at: datetime
     last_seen_at: datetime
     recommendation_reason: Optional[str] = None
+    # These are populated for feed items when a watch session exists. They keep
+    # discovery cards self-contained, without requiring per-card API requests.
+    duration_seconds: Optional[float] = None
+    resume_position_seconds: Optional[float] = None
+    completed: Optional[bool] = None
 
 
 class ScanResultResponse(BaseModel):

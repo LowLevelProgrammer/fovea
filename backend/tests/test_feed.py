@@ -115,6 +115,9 @@ async def test_homepage_feed(db_session, client):
     # ws2 is completed, ws_unavail video is unavailable, ws3 has position_seconds=0
     assert len(cw_section["items"]) == 1
     assert cw_section["items"][0]["id"] == str(v1.id)
+    assert cw_section["items"][0]["resume_position_seconds"] == 120.5
+    assert cw_section["items"][0]["duration_seconds"] == 3600.0
+    assert cw_section["items"][0]["completed"] is False
 
     ra_section = next(s for s in sections if s["id"] == "recently_added")
     # All ready videos should be in recently added, ordered by added_at desc. 
@@ -124,6 +127,8 @@ async def test_homepage_feed(db_session, client):
     assert ra_section["items"][1]["id"] == str(v2.id)
     assert ra_section["items"][2]["id"] == str(v3.id)
     assert ra_section["items"][3]["id"] == str(v4.id)
+    completed_item = next(item for item in ra_section["items"] if item["id"] == str(v2.id))
+    assert completed_item["completed"] is True
 
 @pytest.mark.anyio
 async def test_recommendation_feed(db_session, client):
