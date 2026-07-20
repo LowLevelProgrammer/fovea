@@ -69,3 +69,15 @@ class VideoListResponse(BaseModel):
     limit: int
     total: int
     has_more: bool
+
+
+class SimilarVideoItem(VideoListItem):
+    similarity_reason: str
+
+
+class SimilarVideosResponse(BaseModel):
+    items: list[SimilarVideoItem]
+    offset: int
+    limit: int
+    total: int
+    has_more: bool

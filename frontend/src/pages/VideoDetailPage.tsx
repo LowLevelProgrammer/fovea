@@ -6,13 +6,16 @@ import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
 import { useWatchProgress } from "../hooks/useWatchProgress";
 import { formatBytes } from "../utils/format";
+import { SimilarVideos } from "../components/SimilarVideos";
+import { useSimilarVideos } from "../hooks/useSimilarVideos";
 
 type VideoDetailPageProps = {
   videoId: string;
   onBack: () => void;
+  onSelectVideo: (id: string) => void;
 };
 
-export function VideoDetailPage({ videoId, onBack }: VideoDetailPageProps) {
+export function VideoDetailPage({ videoId, onBack, onSelectVideo }: VideoDetailPageProps) {
   const [video, setVideo] = React.useState<VideoRead | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<{ status: number; message: string } | null>(null);
@@ -53,6 +56,7 @@ export function VideoDetailPage({ videoId, onBack }: VideoDetailPageProps) {
   const resumePosition = video ? video.resume_position_seconds : null;
   const { videoRef, handleLoadedMetadata, handlePlay, handlePauseOrEnded } =
     useWatchProgress(videoId, resumePosition);
+  const similarVideos = useSimilarVideos(videoId);
 
   const handleVideoError = (e: React.SyntheticEvent<HTMLVideoElement>) => {
     const videoElement = e.currentTarget;
@@ -143,6 +147,10 @@ export function VideoDetailPage({ videoId, onBack }: VideoDetailPageProps) {
           </span>
         </div>
       </div>
+
+      {!similarVideos.loading && !similarVideos.error && (
+        <SimilarVideos videos={similarVideos.videos} onSelectVideo={onSelectVideo} />
+      )}
     </div>
   );
 }

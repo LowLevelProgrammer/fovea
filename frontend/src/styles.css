@@ -299,6 +299,14 @@ body {
   grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
 }
 
+.similar-videos { border-top: 1px solid var(--card-border); padding-top: 24px; }
+
+.similar-videos-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
 .feed-sentinel { min-height: 72px; }
 
 .search-bar {

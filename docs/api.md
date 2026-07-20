@@ -238,6 +238,32 @@ Returns the Continue Watching row and one page from the ranked discovery feed.
 
 ### 3.3 Videos
 
+#### `GET /videos/{id}/similar`
+
+Returns metadata-similar videos for one source video. It is independent of user
+recommendations and excludes the source video itself.
+
+| Param | Type | Default | Description |
+|---|---|---|---|
+| `offset` | int | 0 | Zero-based result offset |
+| `limit` | int | 12 | Items to return (1–100) |
+
+```json
+{
+  "items": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "title": "Dynamic Programming Memoization",
+      "similarity_reason": "Shared tag: Algorithms"
+    }
+  ],
+  "offset": 0,
+  "limit": 12,
+  "total": 1,
+  "has_more": false
+}
+```
+
 #### `GET /videos/{id}`
 
 Returns `VideoDetail`.
@@ -261,33 +287,6 @@ Streams video bytes from source file.
 
 **Open question:** `Content-Disposition: inline` vs `attachment`?  
 **Default:** `inline` for browser playback.
-
-#### `GET /videos/{id}/recommendations`
-
-Sidebar recommendations for video page.
-
-**Query:**
-
-| Param | Type | Default |
-|-------|------|---------|
-| `limit` | int | 12 |
-| `random_ratio` | float | 0.2 |
-
-**Response:**
-
-```json
-{
-  "items": [
-    {
-      "video": { /* VideoSummary */ },
-      "reason": "similar_tags",
-      "reason_detail": "Shared tags: tutorials, networking"
-    }
-  ]
-}
-```
-
-**Reason codes:** `similar_tags`, `same_folder`, `co_watched`, `random`, `unwatched`
 
 #### `PATCH /videos/{id}`
 
@@ -380,6 +379,8 @@ Paginated watch history ordered by recency.
 ```
 
 **Future parameter:** `mode=keyword|semantic|hybrid` (reserved, not implemented Phase 1).
+
+**Personalization:** Each completed search is recorded with its query and result count for local recommendation scoring. The response format is unchanged.
 
 ---
 

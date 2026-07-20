@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.core.config import get_settings
 from app.db.base import Base
-from app.models import Video, WatchPath, WatchSession, Tag, VideoTag  # noqa: F401
+from app.models import SearchHistory, Tag, Video, VideoTag, WatchPath, WatchSession  # noqa: F401
 
 config = context.config
 
@@ -60,4 +60,3 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
-

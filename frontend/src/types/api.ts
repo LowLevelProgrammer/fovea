@@ -40,6 +40,18 @@ export type VideoListResponse = {
   has_more: boolean;
 };
 
+export type SimilarVideoItem = VideoListItem & {
+  similarity_reason: string;
+};
+
+export type SimilarVideosResponse = {
+  items: SimilarVideoItem[];
+  offset: number;
+  limit: number;
+  total: number;
+  has_more: boolean;
+};
+
 export type VideoRead = {
   id: string;
   file_path: string;

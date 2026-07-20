@@ -1,10 +1,12 @@
 from dataclasses import dataclass
+import re
 from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import case, func, select
 
 from app.models.tag import Tag, VideoTag
+from app.models.search_history import SearchHistory
 from app.models.video import Video
 from app.models.watch_session import WatchSession
 
@@ -55,16 +57,22 @@ class RecommendationService:
         candidates = (await session.execute(stmt)).scalars().all()
 
         tag_scores, tag_names = await RecommendationService._watch_tag_profile(session)
+        search_scores, search_terms = await RecommendationService._search_title_profile(session, candidates)
         recency_scores, recently_added_ids = RecommendationService._recency_scores(candidates)
         ranked: list[RankedVideo] = []
         for video in candidates:
             tag_score = tag_scores.get(video.id, 0.0)
+            search_score = search_scores.get(video.id, 0.0)
             popularity_score = min(video.watch_count, 10) * 0.15
             recency_score = recency_scores[video.id]
             exploration_score = (int(video.id.hex[-6:], 16) % 1000) / 10000
-            score = tag_score * 3 + popularity_score + recency_score + exploration_score
+            tag_contribution = tag_score * 3
+            search_contribution = search_score * 1.5
+            score = tag_contribution + search_contribution + popularity_score + recency_score + exploration_score
 
-            if tag_score:
+            if search_contribution and search_contribution >= tag_contribution:
+                reason = f"Because you searched: {search_terms[video.id]}"
+            elif tag_score:
                 reason = f"Shared tag: {tag_names[video.id]}"
             elif video.id in recently_added_ids:
                 reason = "Recently added"
@@ -78,6 +86,44 @@ class RecommendationService:
             key=lambda item: (-item.score, -item.video.added_at.timestamp(), str(item.video.id))
         )
         return ranked[offset : offset + limit], len(ranked)
+
+    @staticmethod
+    def _tokenize(text: str) -> set[str]:
+        """Normalize simple searchable terms without external language tooling."""
+        ignored_tokens = {"and", "for", "from", "the", "video", "with"}
+        return {
+            token
+            for token in re.findall(r"[a-z0-9]+", text.lower())
+            if len(token) > 1 and token not in ignored_tokens
+        }
+
+    @staticmethod
+    async def _search_title_profile(
+        session, candidates: list[Video]
+    ) -> tuple[dict[UUID, float], dict[UUID, str]]:
+        """Score title-token overlap against a deterministic search profile."""
+        history = (
+            await session.execute(select(SearchHistory).order_by(SearchHistory.searched_at.desc(), SearchHistory.id.asc()))
+        ).scalars().all()
+        if not history:
+            return {}, {}
+
+        history_count = len(history)
+        token_weights: dict[str, float] = {}
+        for index, entry in enumerate(history):
+            recency_weight = 1 + (history_count - index) / history_count
+            for token in RecommendationService._tokenize(entry.query):
+                token_weights[token] = token_weights.get(token, 0.0) + recency_weight
+
+        scores: dict[UUID, float] = {}
+        matched_terms: dict[UUID, str] = {}
+        for video in candidates:
+            title_tokens = RecommendationService._tokenize(video.title)
+            matched = title_tokens.intersection(token_weights)
+            if matched:
+                scores[video.id] = sum(token_weights[token] for token in matched)
+                matched_terms[video.id] = sorted(matched, key=lambda token: (-token_weights[token], token))[0]
+        return scores, matched_terms
 
     @staticmethod
     def _recency_scores(candidates: list[Video]) -> tuple[dict[UUID, float], set[UUID]]:

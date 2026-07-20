@@ -5,12 +5,14 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select, or_, case, exists
 from sqlalchemy.orm import selectinload
 
-from app.api.schemas.video import ScanResultResponse, VideoListResponse, VideoListItem, VideoRead
+from app.api.schemas.video import ScanResultResponse, SimilarVideoItem, SimilarVideosResponse, VideoListResponse, VideoListItem, VideoRead
 from app.api.schemas.tag import VideoTagUpdate
 from app.db.session import async_session
 from app.models.video import Video
 from app.models.tag import Tag, VideoTag
+from app.models.search_history import SearchHistory
 from app.services.scan_service import ScanService
+from app.services.similarity_service import SimilarityService
 from app.core.range_stream import range_stream_response
 
 router = APIRouter(tags=["videos"])
@@ -174,6 +176,41 @@ async def stream_video(
     return range_stream_response(video.file_path, range)
 
 
+@router.get("/videos/{video_id}/similar", response_model=SimilarVideosResponse)
+async def get_similar_videos(
+    video_id: UUID,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(12, ge=1, le=100),
+) -> SimilarVideosResponse:
+    """Return deterministic metadata-similar videos for one source video."""
+    async with async_session() as session:
+        source = (
+            await session.execute(
+                select(Video).options(selectinload(Video.tags)).where(Video.id == video_id)
+            )
+        ).scalar_one_or_none()
+        if not source:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found.")
+        if source.status == "unavailable":
+            raise HTTPException(status_code=status.HTTP_410_GONE, detail="Video is unavailable.")
+
+        similar, total = await SimilarityService.get_similar(session, source, limit, offset)
+        items = [
+            SimilarVideoItem(
+                **VideoListItem.model_validate(item.video).model_dump(),
+                similarity_reason=item.reason,
+            )
+            for item in similar
+        ]
+        return SimilarVideosResponse(
+            items=items,
+            offset=offset,
+            limit=limit,
+            total=total,
+            has_more=offset + len(items) < total,
+        )
+
+
 @router.get("/search", response_model=list[VideoListItem])
 async def search_videos(q: str = Query(..., min_length=1)) -> list[VideoListItem]:
     """
@@ -209,6 +246,9 @@ async def search_videos(q: str = Query(..., min_length=1)) -> list[VideoListItem
         videos = result.scalars().all()
 
     items = [VideoListItem.model_validate(v) for v in videos]
+    async with async_session() as session:
+        session.add(SearchHistory(query=q.strip(), result_count=len(items)))
+        await session.commit()
     return items
 
 
@@ -287,5 +327,3 @@ async def update_video_tags(video_id: UUID, payload: VideoTagUpdate) -> VideoRea
     video_read = VideoRead.model_validate(video)
     video_read.resume_position_seconds = resume_pos
     return video_read
-
-

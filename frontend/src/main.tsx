@@ -105,7 +105,7 @@ function App() {
       </header>
 
       <main className="app-main">
-        {route.page === "video" && <VideoDetailPage key={route.id} videoId={route.id} onBack={handleBack} />}
+        {route.page === "video" && <VideoDetailPage key={route.id} videoId={route.id} onBack={handleBack} onSelectVideo={handleSelectVideo} />}
         {route.page === "home" && <HomePage onSelectVideo={handleSelectVideo} />}
         {route.page === "library" && <VideoLibraryPage onSelectVideo={handleSelectVideo} />}
         {route.page === "search" && <SearchPage onSelectVideo={handleSelectVideo} initialQuery={route.query} />}

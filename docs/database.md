@@ -382,6 +382,19 @@ Tracks what was shown to avoid immediate repetition within a session.
 
 **Phase 1 alternative:** Skip this table entirely; use in-process session state for deduplication within a browser session. Persist impressions only if cross-session deduplication becomes a demonstrated need.
 
+### 7.2 `search_history`
+
+Completed search requests used for deterministic personalization. Search history
+never modifies source files.
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | UUID | PK | |
+| `query` | TEXT | NOT NULL | Original completed search query |
+| `searched_at` | TIMESTAMPTZ | NOT NULL | Recency ordering for token weights |
+| `result_count` | INTEGER | NOT NULL | Number of matching videos |
+| `clicked_video_id` | UUID | NULL, FK videos | Reserved for later click tracking |
+
 ---
 
 ## 8. Future Tables (Designed, Not Implemented)
