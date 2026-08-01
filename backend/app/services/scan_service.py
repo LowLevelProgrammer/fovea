@@ -207,13 +207,19 @@ class ScanService:
                                 videos_to_probe.append(existing_video)  # Track ORM object for probe enqueueing
                             else:
                                 # Scenario 2a: Seen again (available)
-                                # Do NOT enqueue a new probe job
+                                source_changed = (
+                                    existing_video.file_size != df.file_size
+                                    or existing_video.file_mtime != df.file_mtime
+                                )
                                 existing_video.last_seen_at = datetime.now(timezone.utc)
                                 existing_video.file_size = df.file_size
                                 existing_video.file_mtime = df.file_mtime
                                 existing_video.fingerprint = df.fingerprint
                                 session.add(existing_video)
                                 await _apply_auto_tags(session, existing_video, df.file_path, wp.path)
+                                if source_changed:
+                                    existing_video.status = "discovered"
+                                    videos_to_probe.append(existing_video)
 
 
                         watch_paths_scanned += 1

@@ -1,6 +1,6 @@
 import React from "react";
 import { VideoRead } from "../types/api";
-import { getVideoMetadata } from "../api/videos";
+import { chooseThumbnail, getVideoMetadata } from "../api/videos";
 import { VideoPlayer } from "../components/VideoPlayer";
 import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
@@ -19,6 +19,7 @@ export function VideoDetailPage({ videoId, onBack, onSelectVideo }: VideoDetailP
   const [video, setVideo] = React.useState<VideoRead | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<{ status: number; message: string } | null>(null);
+  const [thumbnailMessage, setThumbnailMessage] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -84,6 +85,23 @@ export function VideoDetailPage({ videoId, onBack, onSelectVideo }: VideoDetailP
     setError({ status: 500, message });
   };
 
+  const handleChooseThumbnail = async () => {
+    const timestamp = videoRef.current?.currentTime;
+    if (timestamp == null || !Number.isFinite(timestamp)) return;
+    try {
+      const result = await chooseThumbnail(videoId, timestamp);
+      setThumbnailMessage(
+        result.queued
+          ? "Thumbnail generation queued for the current frame."
+          : result.status === "generating"
+            ? "A thumbnail is already being generated. Try again in a moment."
+            : "A thumbnail request is already pending."
+      );
+    } catch (err) {
+      setThumbnailMessage(err instanceof Error ? err.message : "Failed to queue the thumbnail frame.");
+    }
+  };
+
   if (loading && !error) {
     return <LoadingState message="Loading metadata..." />;
   }
@@ -128,8 +146,16 @@ export function VideoDetailPage({ videoId, onBack, onSelectVideo }: VideoDetailP
 
       <div className="video-info-card">
         <div className="video-detail-header">
-          <h2 className="video-detail-title">{video.title}</h2>
-          <span className={`badge ${video.status}`}>{video.status}</span>
+          <div>
+            <h2 className="video-detail-title">{video.title}</h2>
+            {thumbnailMessage && <p className="thumbnail-message">{thumbnailMessage}</p>}
+          </div>
+          <div className="video-detail-actions">
+            <button className="back-button" onClick={() => void handleChooseThumbnail()}>
+              Use current frame
+            </button>
+            <span className={`badge ${video.status}`}>{video.status}</span>
+          </div>
         </div>
 
         <div className="video-detail-metadata">

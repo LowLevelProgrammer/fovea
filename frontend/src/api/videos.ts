@@ -22,6 +22,26 @@ export async function getVideoMetadata(videoId: string): Promise<VideoRead> {
   return response.json();
 }
 
+type ThumbnailRequestResult = {
+  status: "pending" | "generating";
+  queued: boolean;
+};
+
+export async function chooseThumbnail(
+  videoId: string,
+  timestampSeconds: number
+): Promise<ThumbnailRequestResult> {
+  const response = await fetch(`/api/v1/videos/${videoId}/thumbnail`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ timestamp_seconds: timestampSeconds }),
+  });
+  if (!response.ok) {
+    throw new Error("Failed to queue the thumbnail frame.");
+  }
+  return response.json();
+}
+
 export async function fetchHealthReady(): Promise<{ ok: boolean; data: ReadyResponse }> {
   const response = await fetch("/api/v1/health/ready");
   const data = (await response.json()) as ReadyResponse;

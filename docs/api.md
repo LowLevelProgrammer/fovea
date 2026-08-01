@@ -238,6 +238,24 @@ Returns the Continue Watching row and one page from the ranked discovery feed.
 
 ### 3.3 Videos
 
+#### `GET /assets/thumbnails/{video_id}`
+
+Serves a tracked generated JPEG thumbnail. Returns 404 until an asset is ready. Responses use `Cache-Control: public, max-age=0, must-revalidate` so replacements are visible at the stable URL.
+
+#### `POST /videos/{video_id}/thumbnail`
+
+Queues a manually selected FFmpeg frame. A timestamp beyond the known FFprobe duration returns `422`; unknown durations remain supported.
+
+```json
+{ "timestamp_seconds": 42.5 }
+```
+
+Successful requests return `202` with `{ "status": "pending" | "generating", "queued": boolean }`. Missing videos return `404`; unavailable videos return `409`.
+
+#### `POST /videos/{video_id}/thumbnail/regenerate`
+
+Queues an explicit automatic thumbnail regeneration.
+
 #### `GET /videos/{id}/similar`
 
 Returns metadata-similar videos for one source video. It is independent of user

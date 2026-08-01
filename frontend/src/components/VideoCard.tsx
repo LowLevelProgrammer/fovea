@@ -8,6 +8,19 @@ type VideoCardProps = {
 };
 
 export function VideoCard({ video, onClick }: VideoCardProps) {
+  const [thumbnailFailed, setThumbnailFailed] = React.useState(false);
+  const [thumbnailAttempt, setThumbnailAttempt] = React.useState(0);
+  const thumbnailUrl = video.thumbnail_url || `/api/v1/assets/thumbnails/${video.id}`;
+
+  React.useEffect(() => {
+    if (!thumbnailFailed || thumbnailAttempt >= 12) return;
+
+    const timeout = window.setTimeout(() => {
+      setThumbnailFailed(false);
+      setThumbnailAttempt((attempt) => attempt + 1);
+    }, 5000);
+    return () => window.clearTimeout(timeout);
+  }, [thumbnailAttempt, thumbnailFailed]);
   const progress =
     video.resume_position_seconds != null &&
     video.duration_seconds != null &&
@@ -18,7 +31,13 @@ export function VideoCard({ video, onClick }: VideoCardProps) {
   return (
     <button className="video-card" onClick={onClick}>
       <div className="card-thumbnail">
-        {video.thumbnail_url && <img src={video.thumbnail_url} alt="" />}
+        {!thumbnailFailed && (
+          <img
+            src={`${thumbnailUrl}?attempt=${thumbnailAttempt}`}
+            alt=""
+            onError={() => setThumbnailFailed(true)}
+          />
+        )}
         <span className="play-icon">▶</span>
         {progress !== null && (
           <div className="watch-progress" aria-label={`${Math.round(progress)}% watched`}>

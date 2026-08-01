@@ -1,18 +1,21 @@
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status, Header
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import func, select, or_, case, exists
 from sqlalchemy.orm import selectinload
 
-from app.api.schemas.video import ScanResultResponse, SimilarVideoItem, SimilarVideosResponse, VideoListResponse, VideoListItem, VideoRead
+from app.api.schemas.video import ScanResultResponse, SimilarVideoItem, SimilarVideosResponse, ThumbnailRequest, ThumbnailRequestResponse, VideoListResponse, VideoListItem, VideoRead
 from app.api.schemas.tag import VideoTagUpdate
 from app.db.session import async_session
 from app.models.video import Video
 from app.models.tag import Tag, VideoTag
 from app.models.search_history import SearchHistory
+from app.models.video_asset import VideoAsset
 from app.services.scan_service import ScanService
 from app.services.similarity_service import SimilarityService
+from app.services.asset_queue import asset_queue
+from app.services.asset_service import AssetService, THUMBNAIL, ThumbnailRequestResult
 from app.core.range_stream import range_stream_response
 
 router = APIRouter(tags=["videos"])
@@ -136,10 +139,19 @@ async def get_video(video_id: UUID) -> VideoRead:
         watch_session = session_result.scalar_one_or_none()
         resume_pos = None
         if watch_session and not watch_session.completed:
-                resume_pos = watch_session.position_seconds
+            resume_pos = watch_session.position_seconds
+        thumbnail_asset = (
+            await session.execute(
+                select(VideoAsset).where(
+                    VideoAsset.video_id == video_id, VideoAsset.asset_type == THUMBNAIL
+                )
+            )
+        ).scalar_one_or_none()
 
     video_read = VideoRead.model_validate(video)
     video_read.resume_position_seconds = resume_pos
+    video_read.thumbnail_url = f"/api/v1/assets/thumbnails/{video.id}"
+    video_read.thumbnail_status = thumbnail_asset.status if thumbnail_asset else "pending"
     return video_read
 
 
@@ -174,6 +186,63 @@ async def stream_video(
         )
 
     return range_stream_response(video.file_path, range)
+
+
+@router.get("/assets/thumbnails/{video_id}")
+async def serve_thumbnail(video_id: UUID) -> FileResponse:
+    async with async_session() as session:
+        asset = (
+            await session.execute(
+                select(VideoAsset).where(
+                    VideoAsset.video_id == video_id,
+                    VideoAsset.asset_type == THUMBNAIL,
+                    VideoAsset.status == "ready",
+                )
+            )
+        ).scalar_one_or_none()
+    if asset is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thumbnail not found.")
+    try:
+        path = AssetService.resolve_relative_path(asset.relative_path)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thumbnail not found.")
+    if not path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thumbnail not found.")
+    return FileResponse(
+        path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=0, must-revalidate"},
+    )
+
+
+def _thumbnail_request_response(result: ThumbnailRequestResult, video_id: UUID) -> ThumbnailRequestResponse:
+    if result == ThumbnailRequestResult.NOT_FOUND:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found.")
+    if result == ThumbnailRequestResult.UNAVAILABLE:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Video is unavailable.")
+    if result == ThumbnailRequestResult.INVALID_TIMESTAMP:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Thumbnail timestamp exceeds the known video duration.",
+        )
+    if result == ThumbnailRequestResult.QUEUED:
+        asset_queue.enqueue(video_id)
+        return ThumbnailRequestResponse(status="pending", queued=True)
+    if result == ThumbnailRequestResult.GENERATING:
+        return ThumbnailRequestResponse(status="generating", queued=False)
+    return ThumbnailRequestResponse(status="pending", queued=False)
+
+
+@router.post("/videos/{video_id}/thumbnail", response_model=ThumbnailRequestResponse, status_code=status.HTTP_202_ACCEPTED)
+async def choose_thumbnail(video_id: UUID, payload: ThumbnailRequest) -> ThumbnailRequestResponse:
+    result = await AssetService.request_thumbnail(video_id, timestamp_seconds=payload.timestamp_seconds)
+    return _thumbnail_request_response(result, video_id)
+
+
+@router.post("/videos/{video_id}/thumbnail/regenerate", response_model=ThumbnailRequestResponse, status_code=status.HTTP_202_ACCEPTED)
+async def regenerate_thumbnail(video_id: UUID) -> ThumbnailRequestResponse:
+    result = await AssetService.request_thumbnail(video_id, force_automatic=True)
+    return _thumbnail_request_response(result, video_id)
 
 
 @router.get("/videos/{video_id}/similar", response_model=SimilarVideosResponse)

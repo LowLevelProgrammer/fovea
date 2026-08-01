@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     database_url: str = ""
     assets_path: str = "/data/fovea/assets"
+    asset_worker_count: int = 2
+    thumbnail_width: int = 480
     frontend_dist_path: str = "/app/frontend/dist"
     web_origin: str = "http://localhost:5173"
     rename_detection: str = "partial_hash"

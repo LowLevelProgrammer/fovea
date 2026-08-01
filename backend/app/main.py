@@ -12,6 +12,7 @@ from app.services.filesystem_watcher import FileSystemWatcher
 from app.services.probe_worker import ProbeWorker
 from app.services.reconciliation_worker import ReconciliationWorker
 from app.services.scan_service import ScanService
+from app.services.asset_queue import asset_queue
 
 
 logging.basicConfig(
@@ -30,6 +31,7 @@ async def lifespan(app: FastAPI):
     # 1. Start ProbeWorker
     worker = ProbeWorker()
     worker_task = asyncio.create_task(worker.run())
+    await asset_queue.start()
 
     # 2. Start FileSystemWatcher (starts queuing FS events)
     if settings.filesystem_watcher_enabled:
@@ -66,6 +68,8 @@ async def lifespan(app: FastAPI):
     if watcher is not None:
         await watcher.stop()
 
+    await asset_queue.stop()
+
     # 3. Cancel and await ProbeWorker task
     worker_task.cancel()
     try:
@@ -92,4 +96,3 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,6 +28,8 @@ class VideoRead(BaseModel):
     updated_at: datetime
     resume_position_seconds: Optional[float] = None
     tags: list[TagRead] = Field(default_factory=list)
+    thumbnail_url: Optional[str] = None
+    thumbnail_status: Optional[str] = None
 
 
 
@@ -81,3 +83,12 @@ class SimilarVideosResponse(BaseModel):
     limit: int
     total: int
     has_more: bool
+
+
+class ThumbnailRequest(BaseModel):
+    timestamp_seconds: float = Field(ge=0)
+
+
+class ThumbnailRequestResponse(BaseModel):
+    status: Literal["pending", "generating"]
+    queued: bool

@@ -69,6 +69,8 @@ export type VideoRead = {
   created_at: string;
   updated_at: string;
   resume_position_seconds: number | null;
+  thumbnail_url?: string | null;
+  thumbnail_status?: string | null;
 };
 
 export type RankedFeedPage = {
