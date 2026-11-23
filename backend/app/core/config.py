@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     assets_path: str = "/data/fovea/assets"
     asset_worker_count: int = 2
     thumbnail_width: int = 480
+    preview_tile_width: int = 160
+    preview_tile_height: int = 90
+    preview_sprite_columns: int = 10
+    preview_sprite_max_frames: int = 100
     frontend_dist_path: str = "/app/frontend/dist"
     web_origin: str = "http://localhost:5173"
     rename_detection: str = "partial_hash"

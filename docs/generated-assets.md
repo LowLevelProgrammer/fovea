@@ -7,7 +7,9 @@ Fovea stores generated media separately from source libraries. The default asset
 ```
 assets/
   thumbnails/<video-id>.jpg
-  previews/       # reserved
+  previews/<video-id>.vtt
+  previews/<video-id>-0000.jpg
+  previews/<video-id>-0001.jpg   # additional sheets for long videos
   hover/          # reserved
 ```
 
@@ -30,3 +32,11 @@ On startup, Fovea scans ready videos and queues thumbnails that are missing, sta
 `GET /api/v1/assets/thumbnails/{video_id}` serves only a tracked ready thumbnail. It uses `Cache-Control: public, max-age=0, must-revalidate`, so browsers revalidate the stable URL after manual or automatic replacement. It never accepts a filesystem path from the client.
 
 The queue dispatches by asset type, so future preview sprites and hover assets can add an asset generator without redesigning the store or worker lifecycle.
+
+## Seekbar previews
+
+After thumbnail work, ready videos are queued for seekbar preview generation. The priority queue selects pending thumbnails before seekbar previews, and reserves a lower priority for future card-hover previews; both use at most two in-process FFmpeg workers. Preview frames are extracted every 10 seconds. Tiles use a configured 160×90 default size; FFmpeg scales each frame to fit and pads the tile without distorting the source aspect ratio. Sheets use 10 columns and hold at most 100 frames to bound image dimensions. Longer videos use numbered sheets.
+
+The `seekbar_preview` row stores the WebVTT relative path plus the deterministic list of sprite paths and tile metadata in `metadata_json`. WebVTT cues contain intervals and `#xywh=x,y,width,height` fragments pointing to `/api/v1/assets/previews/{video_id}/sprites/{sheet_index}`. The player loads the VTT as a hidden metadata track, reads browser-parsed cue times and text, then parses the fragment and performs the sprite crop itself; browsers do not crop the image from `#xywh` automatically.
+
+Preview files are written to temporary storage first. Generation captures source size and modification time before FFmpeg work, checks both again before promoting files, and only marks the row ready when database metadata still matches. A changed or unavailable source, missing/invalid duration, missing video stream, or FFmpeg failure marks only that video's preview failed. Startup and completed probes queue missing or stale assets; a valid asset is not regenerated on every restart. Sprite retrieval validates the requested non-negative sheet index against the tracked sheet list and resolves only that stored path.

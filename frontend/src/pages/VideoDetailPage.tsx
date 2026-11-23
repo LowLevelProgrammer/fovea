@@ -137,6 +137,7 @@ export function VideoDetailPage({ videoId, onBack, onSelectVideo }: VideoDetailP
       <VideoPlayer
         ref={videoRef}
         src={`/api/v1/videos/${video.id}/stream`}
+        previewSrc={`/api/v1/assets/previews/${video.id}/metadata`}
         onLoadedMetadata={handleLoadedMetadata}
         onPlay={handlePlay}
         onPause={handlePauseOrEnded}

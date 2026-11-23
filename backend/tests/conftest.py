@@ -16,8 +16,8 @@ def anyio_backend():
     return "asyncio"
 
 
-@pytest.fixture(autouse=True)
-async def setup_db():
+@pytest.fixture
+async def setup_db(anyio_backend):
     """Clean database tables before each test and clean up connection pool."""
     async with engine.begin() as conn:
         await conn.execute(
@@ -29,14 +29,14 @@ async def setup_db():
 
 
 @pytest.fixture
-async def db_session():
+async def db_session(setup_db, anyio_backend):
     """Provide an async session for database manipulation in tests."""
     async with async_session() as session:
         yield session
 
 
 @pytest.fixture
-async def client():
+async def client(setup_db, anyio_backend):
     """Provide an async httpx client for testing endpoints."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

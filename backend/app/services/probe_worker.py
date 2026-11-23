@@ -13,7 +13,7 @@ from app.models.video_probe import VideoProbe
 from app.services.job_service import JobService
 from app.services.probe_service import ProbeError, ProbeResult, ProbeService
 from app.services.asset_queue import asset_queue
-from app.services.asset_service import AssetService, ThumbnailRequestResult
+from app.services.asset_service import AssetService, SEEKBAR_PREVIEW, ThumbnailRequestResult
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +126,8 @@ class ProbeWorker:
         )
         if await AssetService.request_thumbnail(video_id) == ThumbnailRequestResult.QUEUED:
             asset_queue.enqueue(video_id)
+        if await AssetService.request_seekbar_preview(video_id):
+            asset_queue.enqueue(video_id, SEEKBAR_PREVIEW)
 
     async def _handle_failure(self, job_id: UUID, video_id: UUID, error_message: str) -> None:
         async with async_session() as session:

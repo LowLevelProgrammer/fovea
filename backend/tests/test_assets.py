@@ -1,5 +1,8 @@
+import asyncio
+import sys
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -7,7 +10,231 @@ from sqlalchemy import select
 from app.models.video import Video
 from app.models.video_asset import VideoAsset
 from app.models.video_probe import VideoProbe
-from app.services.asset_service import AssetService
+from app.services.asset_service import AssetService, SEEKBAR_PREVIEW
+
+
+def test_preview_vtt_timestamp_and_multi_sheet_cues():
+    video_id = uuid.uuid4()
+    assert AssetService.format_vtt_timestamp(3661.25) == "01:01:01.250"
+    vtt = AssetService.build_preview_cues(video_id, 115, 12, 10, 10, 160, 90)
+    assert vtt.startswith("WEBVTT\n\n")
+    assert "00:00:00.000 --> 00:00:10.000\n/api/v1/assets/previews/" + str(video_id) + "/sprites/0#xywh=0,0,160,90" in vtt
+    assert "/sprites/1#xywh=0,0,160,90" in vtt
+    assert "00:01:50.000 --> 00:01:55.000" in vtt
+    assert "00:01:55.000 -->" not in vtt
+
+
+def test_preview_cue_builder_rejects_invalid_duration():
+    with pytest.raises(ValueError):
+        AssetService.build_preview_cues(uuid.uuid4(), 0, 1, 10, 100, 160, 90)
+
+
+@pytest.mark.parametrize(
+    ("configured_columns", "configured_frames", "expected"),
+    [
+        (150, 500, (100, 100)),
+        (10, 500, (10, 100)),
+        (10, 50, (10, 50)),
+        (-2, 0, (1, 1)),
+    ],
+)
+def test_preview_layout_enforces_hard_100_frame_limit(configured_columns, configured_frames, expected):
+    assert AssetService.preview_layout(configured_columns, configured_frames) == expected
+
+
+@pytest.mark.anyio
+async def test_ffmpeg_process_is_reaped_after_communicate_timeout():
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        "import time; time.sleep(30)",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(process.communicate(), timeout=0.05)
+
+    await AssetService._cleanup_ffmpeg_process(process)
+
+    assert process.returncode is not None
+
+
+def _ready_video(video_id, now):
+    return Video(
+        id=video_id,
+        file_path=f"/media/{video_id}.mp4",
+        title="Preview recovery",
+        file_size=123,
+        file_mtime=now,
+        status="ready",
+        added_at=now,
+        last_seen_at=now,
+    )
+
+
+@pytest.mark.anyio
+async def test_preview_request_requeues_when_vtt_is_missing_but_sprite_remains(
+    db_session, monkeypatch, tmp_path
+):
+    now = datetime.now(timezone.utc)
+    video_id = uuid.uuid4()
+    video = _ready_video(video_id, now)
+    vtt_relative = AssetService.seekbar_vtt_path(video_id)
+    sprite_relative = AssetService.seekbar_sprite_path(video_id, 0)
+    sprite = tmp_path / sprite_relative
+    sprite.parent.mkdir(parents=True, exist_ok=True)
+    sprite.write_bytes(b"jpeg")
+    monkeypatch.setattr(
+        "app.services.asset_service.get_settings",
+        lambda: SimpleNamespace(assets_path=str(tmp_path)),
+    )
+    asset = VideoAsset(
+        video_id=video_id,
+        asset_type=SEEKBAR_PREVIEW,
+        relative_path=vtt_relative,
+        status="ready",
+        source_file_mtime=now,
+        source_file_size=video.file_size,
+        metadata_json={"sheets": [sprite_relative]},
+    )
+    db_session.add_all([video, asset])
+    await db_session.commit()
+
+    assert await AssetService.request_seekbar_preview(video_id) is True
+    await db_session.refresh(asset)
+    assert asset.status == "pending"
+
+
+@pytest.mark.anyio
+async def test_startup_preview_recovery_requeues_missing_vtt_with_remaining_sprite(
+    db_session, monkeypatch, tmp_path
+):
+    now = datetime.now(timezone.utc)
+    video_id = uuid.uuid4()
+    video = _ready_video(video_id, now)
+    vtt_relative = AssetService.seekbar_vtt_path(video_id)
+    sprite_relative = AssetService.seekbar_sprite_path(video_id, 0)
+    sprite = tmp_path / sprite_relative
+    sprite.parent.mkdir(parents=True, exist_ok=True)
+    sprite.write_bytes(b"jpeg")
+    monkeypatch.setattr(
+        "app.services.asset_service.get_settings",
+        lambda: SimpleNamespace(assets_path=str(tmp_path)),
+    )
+    asset = VideoAsset(
+        video_id=video_id,
+        asset_type=SEEKBAR_PREVIEW,
+        relative_path=vtt_relative,
+        status="ready",
+        source_file_mtime=now,
+        source_file_size=video.file_size,
+        metadata_json={"sheets": [sprite_relative]},
+    )
+    db_session.add_all([video, asset])
+    await db_session.commit()
+
+    queued = await AssetService.mark_stale_previews_pending()
+
+    assert video_id in queued
+    await db_session.refresh(asset)
+    assert asset.status == "pending"
+
+
+@pytest.mark.anyio
+async def test_malformed_preview_metadata_does_not_stop_startup_recovery(
+    db_session, monkeypatch, tmp_path
+):
+    now = datetime.now(timezone.utc)
+    malformed_id, eligible_id = uuid.uuid4(), uuid.uuid4()
+    malformed_video = _ready_video(malformed_id, now)
+    eligible_video = _ready_video(eligible_id, now)
+    malformed_asset = VideoAsset(
+        video_id=malformed_id,
+        asset_type=SEEKBAR_PREVIEW,
+        relative_path="../outside.vtt",
+        status="ready",
+        source_file_mtime=now,
+        source_file_size=malformed_video.file_size,
+        metadata_json={"sheets": "not-a-list"},
+    )
+    monkeypatch.setattr(
+        "app.services.asset_service.get_settings",
+        lambda: SimpleNamespace(assets_path=str(tmp_path)),
+    )
+    db_session.add_all([malformed_video, eligible_video, malformed_asset])
+    await db_session.commit()
+
+    queued = await AssetService.mark_stale_previews_pending()
+
+    assert malformed_id in queued
+    assert eligible_id in queued
+
+
+@pytest.mark.anyio
+async def test_preview_routes_serve_vtt_and_validate_sprite_index(db_session, client, monkeypatch, tmp_path):
+    now = datetime.now(timezone.utc)
+    video = Video(id=uuid.uuid4(), file_path="/media/preview.mp4", title="Preview", file_size=12,
+                  file_mtime=now, status="ready", added_at=now, last_seen_at=now)
+    vtt = tmp_path / "preview.vtt"
+    sprite = tmp_path / "sprite.jpg"
+    vtt.write_text("WEBVTT\n", encoding="utf-8")
+    sprite.write_bytes(b"jpeg")
+    asset = VideoAsset(video_id=video.id, asset_type=SEEKBAR_PREVIEW,
+                       relative_path=f"previews/{video.id}.vtt", status="ready",
+                       metadata_json={"sheets": [f"previews/{video.id}-0000.jpg"]})
+    db_session.add_all([video, asset])
+    await db_session.commit()
+    monkeypatch.setattr(AssetService, "resolve_relative_path", staticmethod(lambda path: vtt if path.endswith(".vtt") else sprite))
+
+    response = await client.get(f"/api/v1/assets/previews/{video.id}/metadata")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/vtt")
+    assert response.headers["cache-control"] == "public, max-age=0, must-revalidate"
+    valid_sprite = await client.get(f"/api/v1/assets/previews/{video.id}/sprites/0")
+    assert valid_sprite.status_code == 200
+    assert valid_sprite.headers["content-type"].startswith("image/jpeg")
+    assert (await client.get(f"/api/v1/assets/previews/{video.id}/sprites/-1")).status_code == 404
+    assert (await client.get(f"/api/v1/assets/previews/{video.id}/sprites/1")).status_code == 404
+
+
+@pytest.mark.parametrize(
+    "metadata_json",
+    [
+        [],
+        "unexpected metadata shape",
+        {"sheets": "not-a-list"},
+        {"sheets": None},
+        {"sheets": [None]},
+        {"sheets": [""]},
+        {"sheets": ["../outside.jpg"]},
+        {"sheets": ["previews/missing.jpg"]},
+    ],
+)
+@pytest.mark.anyio
+async def test_sprite_route_returns_not_found_for_malformed_or_unavailable_metadata(
+    db_session, client, monkeypatch, tmp_path, metadata_json
+):
+    now = datetime.now(timezone.utc)
+    video_id = uuid.uuid4()
+    video = _ready_video(video_id, now)
+    asset = VideoAsset(
+        video_id=video_id,
+        asset_type=SEEKBAR_PREVIEW,
+        relative_path=AssetService.seekbar_vtt_path(video_id),
+        status="ready",
+        metadata_json=metadata_json,
+    )
+    monkeypatch.setattr(
+        "app.services.asset_service.get_settings",
+        lambda: SimpleNamespace(assets_path=str(tmp_path)),
+    )
+    db_session.add_all([video, asset])
+    await db_session.commit()
+
+    response = await client.get(f"/api/v1/assets/previews/{video_id}/sprites/0")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Seekbar preview sprite not found."}
 
 
 @pytest.mark.anyio

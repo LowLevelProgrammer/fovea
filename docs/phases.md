@@ -250,10 +250,10 @@ Durations are estimates for planning, not commitments.
 - [ ] Thumbnail generation (poster frame at 10% duration or first keyframe)
 - [ ] `video_assets` table population
 - [ ] Asset serving endpoints with cache headers
-- [ ] Seekbar preview sprite + WebVTT generation
-- [ ] Player seekbar hover integration
+- [x] Seekbar preview sprite + WebVTT generation
+- [x] Player seekbar hover integration
 - [ ] Hover preview sprites on video cards
-- [ ] Job priority: thumbnail > preview sprite > hover sprite
+- [ ] Job priority: thumbnail > preview sprite > hover sprite (thumbnail > seekbar preview implemented; card-hover priority remains)
 - [ ] Regenerate assets on file change (mtime/size)
 
 ### 7.2 FFmpeg Job Concurrency

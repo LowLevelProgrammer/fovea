@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status, Header
@@ -15,10 +16,11 @@ from app.models.video_asset import VideoAsset
 from app.services.scan_service import ScanService
 from app.services.similarity_service import SimilarityService
 from app.services.asset_queue import asset_queue
-from app.services.asset_service import AssetService, THUMBNAIL, ThumbnailRequestResult
+from app.services.asset_service import AssetService, SEEKBAR_PREVIEW, THUMBNAIL, ThumbnailRequestResult
 from app.core.range_stream import range_stream_response
 
 router = APIRouter(tags=["videos"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/library/scan", response_model=ScanResultResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -213,6 +215,60 @@ async def serve_thumbnail(video_id: UUID) -> FileResponse:
         media_type="image/jpeg",
         headers={"Cache-Control": "public, max-age=0, must-revalidate"},
     )
+
+
+@router.get("/assets/previews/{video_id}/metadata")
+async def serve_seekbar_preview_vtt(video_id: UUID) -> FileResponse:
+    async with async_session() as session:
+        asset = (await session.execute(select(VideoAsset).where(
+            VideoAsset.video_id == video_id,
+            VideoAsset.asset_type == SEEKBAR_PREVIEW,
+            VideoAsset.status == "ready",
+        ))).scalar_one_or_none()
+    if asset is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Seekbar preview not found.")
+    try:
+        path = AssetService.resolve_relative_path(asset.relative_path)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Seekbar preview not found.")
+    if not path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Seekbar preview not found.")
+    return FileResponse(path, media_type="text/vtt; charset=utf-8", headers={"Cache-Control": "public, max-age=0, must-revalidate"})
+
+
+@router.get("/assets/previews/{video_id}/sprites/{sheet_index}")
+async def serve_seekbar_preview_sprite(video_id: UUID, sheet_index: int) -> FileResponse:
+    async with async_session() as session:
+        asset = (await session.execute(select(VideoAsset).where(
+            VideoAsset.video_id == video_id,
+            VideoAsset.asset_type == SEEKBAR_PREVIEW,
+            VideoAsset.status == "ready",
+        ))).scalar_one_or_none()
+    if asset is None or sheet_index < 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Seekbar preview sprite not found.")
+    metadata = asset.metadata_json
+    if not isinstance(metadata, dict):
+        logger.warning("Seekbar preview metadata is malformed for video %s", video_id)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Seekbar preview sprite not found.")
+    sheets = metadata.get("sheets")
+    if not isinstance(sheets, list) or sheet_index >= len(sheets):
+        logger.warning("Seekbar preview sheet list is malformed for video %s", video_id)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Seekbar preview sprite not found.")
+    sheet_path = sheets[sheet_index]
+    if not isinstance(sheet_path, str) or not sheet_path.strip():
+        logger.warning("Seekbar preview sheet entry is malformed for video %s at index %s", video_id, sheet_index)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Seekbar preview sprite not found.")
+    try:
+        path = AssetService.resolve_relative_path(sheet_path)
+        if not path.is_file():
+            logger.warning("Seekbar preview sprite file is missing for video %s at index %s", video_id, sheet_index)
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Seekbar preview sprite not found.")
+    except HTTPException:
+        raise
+    except (OSError, RuntimeError, ValueError, TypeError) as exc:
+        logger.warning("Seekbar preview sprite path is invalid for video %s at index %s: %s", video_id, sheet_index, exc)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Seekbar preview sprite not found.")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=0, must-revalidate"})
 
 
 def _thumbnail_request_response(result: ThumbnailRequestResult, video_id: UUID) -> ThumbnailRequestResponse:
