@@ -29,13 +29,13 @@ export function HomePage({ onSelectVideo }: HomePageProps) {
         <section className="continue-watching" aria-labelledby="continue-watching-title">
           <h2 id="continue-watching-title" className="feed-section-title">Continue Watching</h2>
           <div className="feed-row">
-            {feed.continue_watching.map((video) => <VideoCard key={video.id} video={video} onClick={() => onSelectVideo(video.id)} />)}
+            {feed.continue_watching.map((video) => <VideoCard key={video.id} video={video} enableHoverPreview onClick={() => onSelectVideo(video.id)} />)}
           </div>
         </section>
       )}
       <section aria-label="Recommended videos">
         <div className="discovery-grid">
-          {feed.recommendations.items.map((video) => <VideoCard key={video.id} video={video} onClick={() => onSelectVideo(video.id)} />)}
+          {feed.recommendations.items.map((video) => <VideoCard key={video.id} video={video} enableHoverPreview onClick={() => onSelectVideo(video.id)} />)}
         </div>
         {feed.recommendations.has_more && <div className="feed-sentinel" ref={sentinelRef}>{loadingMore && <LoadingState message="Loading more videos..." />}</div>}
       </section>

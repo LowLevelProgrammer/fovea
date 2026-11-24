@@ -28,17 +28,7 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     watcher: FileSystemWatcher | None = None
 
-    # 1. Start ProbeWorker
-    worker = ProbeWorker()
-    worker_task = asyncio.create_task(worker.run())
-    await asset_queue.start()
-
-    # 2. Start FileSystemWatcher (starts queuing FS events)
-    if settings.filesystem_watcher_enabled:
-        watcher = FileSystemWatcher()
-        await watcher.start()
-
-    # 3. Run ScanService.scan() synchronously if enabled
+    # 1. Refresh source signatures before any asset recovery can dispatch FFmpeg.
     # Critical infrastructure/database failures bubble up to fail startup and exit the process.
     if settings.startup_scan_enabled:
         logger.info("Starting startup library scan...")
@@ -51,7 +41,17 @@ async def lifespan(app: FastAPI):
             result.duration_seconds,
         )
 
-    # 4. Start ReconciliationWorker
+    # 2. Start workers after scan updates signatures and queues probe work.
+    worker = ProbeWorker()
+    worker_task = asyncio.create_task(worker.run())
+    await asset_queue.start()
+
+    # 3. Start FileSystemWatcher (starts queuing FS events).
+    if settings.filesystem_watcher_enabled:
+        watcher = FileSystemWatcher()
+        await watcher.start()
+
+    # 4. Start ReconciliationWorker.
     reconciler = ReconciliationWorker()
     reconciler_task = asyncio.create_task(reconciler.run())
 

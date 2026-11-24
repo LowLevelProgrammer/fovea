@@ -26,6 +26,21 @@ async def test_thumbnail_queue_priority_and_deduplication():
 
 
 @pytest.mark.anyio
+async def test_queue_preserves_fifo_order_within_priority():
+    queue = AssetGenerationQueue()
+    ids = [uuid.uuid4() for _ in range(3)]
+    for video_id in ids:
+        queue.enqueue(video_id, SEEKBAR_PREVIEW)
+
+    actual = []
+    for _ in ids:
+        _, _, video_id, asset_type = await queue._queue.get()
+        actual.append((video_id, asset_type))
+
+    assert actual == [(video_id, SEEKBAR_PREVIEW) for video_id in ids]
+
+
+@pytest.mark.anyio
 async def test_worker_count_is_capped_at_two(monkeypatch):
     queue = AssetGenerationQueue()
     active = 0
@@ -43,6 +58,7 @@ async def test_worker_count_is_capped_at_two(monkeypatch):
 
     monkeypatch.setattr(AssetService, "mark_stale_thumbnails_pending", no_stale_assets)
     monkeypatch.setattr(AssetService, "mark_stale_previews_pending", no_stale_assets)
+    monkeypatch.setattr(AssetService, "mark_stale_hover_previews_pending", no_stale_assets)
     monkeypatch.setattr(AssetService, "generate_asset", generate)
     monkeypatch.setattr("app.services.asset_queue.get_settings", lambda: SimpleNamespace(asset_worker_count=5))
     for _ in range(6):
@@ -52,3 +68,18 @@ async def test_worker_count_is_capped_at_two(monkeypatch):
     await queue._queue.join()
     await queue.stop()
     assert peak == 2
+
+
+@pytest.mark.anyio
+async def test_hover_asset_job_dispatches_to_hover_generator(monkeypatch):
+    video_id = uuid.uuid4()
+    generated = []
+
+    async def generate_hover(video):
+        generated.append(video)
+
+    monkeypatch.setattr(AssetService, "generate_hover_preview", generate_hover)
+
+    await AssetService.generate_asset(video_id, HOVER_PREVIEW)
+
+    assert generated == [video_id]

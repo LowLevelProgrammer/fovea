@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from app.db.session import async_session
 from app.models.watch_path import WatchPath
 from app.models.video import Video
+from app.models.video_asset import VideoAsset
 from app.models.tag import Tag, VideoTag
 from app.services.job_service import JobService
 from app.services.video_scanner import VideoScanner
@@ -94,6 +95,13 @@ async def _apply_auto_tags(session, video: Video, file_path: str, watch_root: st
 
         new_assoc = VideoTag(video_id=video.id, tag_id=tag.id, source="auto")
         session.add(new_assoc)
+
+
+async def _mark_video_assets_stale(session, video_id: UUID) -> None:
+    result = await session.execute(select(VideoAsset).where(VideoAsset.video_id == video_id))
+    for asset in result.scalars():
+        asset.status = "stale"
+        asset.error_message = None
 
 
 @dataclass
@@ -196,6 +204,10 @@ class ScanService:
                                 videos_to_probe.append(video)  # Track ORM object for probe enqueueing
                             elif existing_video.status == "unavailable":
                                 # Scenario 2b: Reappearing file
+                                source_changed = (
+                                    existing_video.file_size != df.file_size
+                                    or existing_video.file_mtime != df.file_mtime
+                                )
                                 existing_video.status = "discovered"
                                 existing_video.last_seen_at = datetime.now(timezone.utc)
                                 existing_video.unavailable_since = None
@@ -203,6 +215,8 @@ class ScanService:
                                 existing_video.file_mtime = df.file_mtime
                                 existing_video.fingerprint = df.fingerprint
                                 session.add(existing_video)
+                                if source_changed:
+                                    await _mark_video_assets_stale(session, existing_video.id)
                                 await _apply_auto_tags(session, existing_video, df.file_path, wp.path)
                                 videos_to_probe.append(existing_video)  # Track ORM object for probe enqueueing
                             else:
@@ -216,6 +230,8 @@ class ScanService:
                                 existing_video.file_mtime = df.file_mtime
                                 existing_video.fingerprint = df.fingerprint
                                 session.add(existing_video)
+                                if source_changed:
+                                    await _mark_video_assets_stale(session, existing_video.id)
                                 await _apply_auto_tags(session, existing_video, df.file_path, wp.path)
                                 if source_changed:
                                     existing_video.status = "discovered"

@@ -246,15 +246,15 @@ Durations are estimates for planning, not commitments.
 
 ### 7.1 Deliverables
 
-- [ ] Asset store volume and directory layout
-- [ ] Thumbnail generation (poster frame at 10% duration or first keyframe)
-- [ ] `video_assets` table population
-- [ ] Asset serving endpoints with cache headers
+- [x] Asset store volume and directory layout
+- [x] Thumbnail generation (poster frame at 10% duration or first keyframe)
+- [x] `video_assets` table population
+- [x] Asset serving endpoints with cache headers
 - [x] Seekbar preview sprite + WebVTT generation
 - [x] Player seekbar hover integration
-- [ ] Hover preview sprites on video cards
-- [ ] Job priority: thumbnail > preview sprite > hover sprite (thumbnail > seekbar preview implemented; card-hover priority remains)
-- [ ] Regenerate assets on file change (mtime/size)
+- [x] Hover preview sprites on homepage and recommendation sidebar cards
+- [x] Job priority: thumbnail > seekbar preview sprite > card-hover sprite
+- [x] Regenerate assets on source file change (mtime/size)
 
 ### 7.2 FFmpeg Job Concurrency
 
@@ -271,7 +271,7 @@ Durations are estimates for planning, not commitments.
 
 - All `ready` videos have thumbnails within reasonable time (background)
 - Seekbar hover shows preview frames on video player
-- Card hover shows animated/sprite preview in homepage and sidebar
+- Card hover shows a silent sprite animation in homepage and recommendation sidebar; touch and reduced-motion users retain the poster frame
 - Deleting asset store and restarting regenerates all assets without affecting source
 
 ### 7.4 Deferred to Phase 4.5+

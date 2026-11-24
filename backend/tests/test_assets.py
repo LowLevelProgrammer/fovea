@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -10,7 +11,10 @@ from sqlalchemy import select
 from app.models.video import Video
 from app.models.video_asset import VideoAsset
 from app.models.video_probe import VideoProbe
-from app.services.asset_service import AssetService, SEEKBAR_PREVIEW
+from app.models.watch_path import WatchPath
+from app.services.asset_service import AssetService, HOVER_PREVIEW, SEEKBAR_PREVIEW, THUMBNAIL
+from app.services.scan_service import ScanService
+from app.core.config import Settings
 
 
 def test_preview_vtt_timestamp_and_multi_sheet_cues():
@@ -27,6 +31,12 @@ def test_preview_vtt_timestamp_and_multi_sheet_cues():
 def test_preview_cue_builder_rejects_invalid_duration():
     with pytest.raises(ValueError):
         AssetService.build_preview_cues(uuid.uuid4(), 0, 1, 10, 100, 160, 90)
+
+
+def test_hover_tile_defaults_are_independent_from_seekbar_tiles():
+    settings = Settings()
+    assert (settings.preview_tile_width, settings.preview_tile_height) == (160, 90)
+    assert (settings.hover_preview_tile_width, settings.hover_preview_tile_height) == (320, 180)
 
 
 @pytest.mark.parametrize(
@@ -70,6 +80,382 @@ def _ready_video(video_id, now):
         added_at=now,
         last_seen_at=now,
     )
+
+
+def _hover_test_settings(asset_root):
+    return SimpleNamespace(
+        assets_path=str(asset_root),
+        preview_tile_width=160,
+        preview_tile_height=90,
+        preview_sprite_columns=10,
+        preview_sprite_max_frames=100,
+        hover_preview_tile_width=320,
+        hover_preview_tile_height=180,
+    )
+
+
+@pytest.mark.anyio
+async def test_hover_preview_generation_writes_one_30_frame_sprite_and_cleans_temp(
+    db_session, monkeypatch, tmp_path
+):
+    now = datetime.now(timezone.utc)
+    video_id = uuid.uuid4()
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source video")
+    stat = source.stat()
+    video = _ready_video(video_id, datetime.fromtimestamp(stat.st_mtime, timezone.utc))
+    video.file_path = str(source)
+    video.file_size = stat.st_size
+    asset = VideoAsset(
+        video_id=video_id,
+        asset_type=HOVER_PREVIEW,
+        relative_path=AssetService.hover_preview_sprite_path(video_id),
+        status="pending",
+    )
+    probe = VideoProbe(video_id=video_id, duration_seconds=60, video_codec="h264")
+    assets_root = tmp_path / "assets"
+    commands = []
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return b"", b""
+
+    async def fake_ffmpeg(*command, **_kwargs):
+        commands.append(command)
+        from pathlib import Path
+
+        Path(command[-1]).write_bytes(b"sprite jpeg")
+        return FakeProcess()
+
+    monkeypatch.setattr("app.services.asset_service.get_settings", lambda: _hover_test_settings(assets_root))
+    monkeypatch.setattr("app.services.asset_service.asyncio.create_subprocess_exec", fake_ffmpeg)
+    db_session.add_all([video, asset, probe])
+    await db_session.commit()
+
+    await AssetService.generate_hover_preview(video_id)
+
+    await db_session.refresh(asset)
+    expected_path = AssetService.hover_preview_sprite_path(video_id)
+    metadata = asset.metadata_json
+    assert asset.status == "ready"
+    assert asset.relative_path == expected_path
+    assert asset.source_file_size == stat.st_size
+    assert asset.source_file_mtime == video.file_mtime
+    assert metadata["sheets"] == [expected_path]
+    assert metadata["frame_count"] == 30
+    assert metadata["duration_seconds"] == 5.0
+    assert metadata["columns"] == 10 and metadata["rows"] == 3
+    assert metadata["tile_width"] == 320 and metadata["tile_height"] == 180
+    assert metadata["rows"] == 3
+    hover_filter = commands[0][commands[0].index("-vf") + 1]
+    assert "fps=6.000000" in hover_filter
+    assert "scale=320:180:force_original_aspect_ratio=decrease" in hover_filter
+    assert "pad=320:180:(ow-iw)/2:(oh-ih)/2" in hover_filter
+    assert "tile=10x3:nb_frames=30" in hover_filter
+    assert AssetService.resolve_relative_path(expected_path).read_bytes() == b"sprite jpeg"
+    assert not list(assets_root.glob(".fovea-hover-*"))
+
+
+@pytest.mark.anyio
+async def test_seekbar_generation_keeps_160_by_90_tiles(db_session, monkeypatch, tmp_path):
+    video_id = uuid.uuid4()
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source video")
+    stat = source.stat()
+    now = datetime.fromtimestamp(stat.st_mtime, timezone.utc)
+    video = _ready_video(video_id, now)
+    video.file_path = str(source)
+    video.file_size = stat.st_size
+    asset = VideoAsset(
+        video_id=video_id,
+        asset_type=SEEKBAR_PREVIEW,
+        relative_path=AssetService.seekbar_vtt_path(video_id),
+        status="pending",
+    )
+    probe = VideoProbe(video_id=video_id, duration_seconds=10, video_codec="h264")
+    assets_root = tmp_path / "assets"
+    commands = []
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            command = commands[-1]
+            destination = command[-1]
+            if "%08d" in destination:
+                from pathlib import Path
+
+                Path(destination.replace("%08d", "00000001")).write_bytes(b"frame")
+            else:
+                from pathlib import Path
+
+                Path(destination).write_bytes(b"seekbar sprite")
+            return b"", b""
+
+    async def fake_ffmpeg(*command, **_kwargs):
+        commands.append(command)
+        return FakeProcess()
+
+    monkeypatch.setattr("app.services.asset_service.get_settings", lambda: _hover_test_settings(assets_root))
+    monkeypatch.setattr("app.services.asset_service.asyncio.create_subprocess_exec", fake_ffmpeg)
+    db_session.add_all([video, asset, probe])
+    await db_session.commit()
+
+    await AssetService.generate_seekbar_preview(video_id)
+
+    await db_session.refresh(asset)
+    assert asset.status == "ready"
+    assert asset.metadata_json["tile_width"] == 160
+    assert asset.metadata_json["tile_height"] == 90
+    first_filter = commands[0][commands[0].index("-vf") + 1]
+    assert "scale=160:90:force_original_aspect_ratio=decrease" in first_filter
+    assert "pad=160:90:(ow-iw)/2:(oh-ih)/2" in first_filter
+
+
+@pytest.mark.anyio
+async def test_hover_preview_source_change_during_ffmpeg_fails_and_cleans_output(
+    db_session, monkeypatch, tmp_path
+):
+    now = datetime.now(timezone.utc)
+    video_id = uuid.uuid4()
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source video")
+    stat = source.stat()
+    video = _ready_video(video_id, datetime.fromtimestamp(stat.st_mtime, timezone.utc))
+    video.file_path = str(source)
+    video.file_size = stat.st_size
+    asset = VideoAsset(
+        video_id=video_id,
+        asset_type=HOVER_PREVIEW,
+        relative_path=AssetService.hover_preview_sprite_path(video_id),
+        status="pending",
+    )
+    probe = VideoProbe(video_id=video_id, duration_seconds=60, video_codec="h264")
+    assets_root = tmp_path / "assets"
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            source.write_bytes(source.read_bytes() + b" changed")
+            return b"", b""
+
+    async def fake_ffmpeg(*command, **_kwargs):
+        from pathlib import Path
+
+        Path(command[-1]).write_bytes(b"obsolete sprite")
+        return FakeProcess()
+
+    monkeypatch.setattr("app.services.asset_service.get_settings", lambda: _hover_test_settings(assets_root))
+    monkeypatch.setattr("app.services.asset_service.asyncio.create_subprocess_exec", fake_ffmpeg)
+    db_session.add_all([video, asset, probe])
+    await db_session.commit()
+
+    await AssetService.generate_hover_preview(video_id)
+
+    await db_session.refresh(asset)
+    assert asset.status == "failed"
+    assert not AssetService.resolve_relative_path(AssetService.hover_preview_sprite_path(video_id)).exists()
+    assert not list(assets_root.glob(".fovea-hover-*"))
+
+
+@pytest.mark.parametrize("failure", ["ffmpeg", "missing_source"])
+@pytest.mark.anyio
+async def test_hover_preview_generation_failures_mark_asset_failed_and_clean_temp(
+    db_session, monkeypatch, tmp_path, failure
+):
+    now = datetime.now(timezone.utc)
+    video_id = uuid.uuid4()
+    source = tmp_path / "source.mp4"
+    if failure == "ffmpeg":
+        source.write_bytes(b"source video")
+        stat = source.stat()
+        source_size = stat.st_size
+        source_mtime = datetime.fromtimestamp(stat.st_mtime, timezone.utc)
+    else:
+        source_size = 0
+        source_mtime = now
+    video = _ready_video(video_id, source_mtime)
+    video.file_path = str(source)
+    video.file_size = source_size
+    asset = VideoAsset(
+        video_id=video_id,
+        asset_type=HOVER_PREVIEW,
+        relative_path=AssetService.hover_preview_sprite_path(video_id),
+        status="pending",
+    )
+    probe = VideoProbe(video_id=video_id, duration_seconds=10, video_codec="h264")
+    assets_root = tmp_path / "assets"
+
+    class FailedProcess:
+        returncode = 1
+
+        async def communicate(self):
+            return b"", b"expected test ffmpeg failure"
+
+    async def fail_ffmpeg(*_command, **_kwargs):
+        return FailedProcess()
+
+    monkeypatch.setattr("app.services.asset_service.get_settings", lambda: _hover_test_settings(assets_root))
+    monkeypatch.setattr("app.services.asset_service.asyncio.create_subprocess_exec", fail_ffmpeg)
+    db_session.add_all([video, asset, probe])
+    await db_session.commit()
+
+    await AssetService.generate_hover_preview(video_id)
+
+    await db_session.refresh(asset)
+    assert asset.status == "failed"
+    assert asset.error_message
+    assert not list(assets_root.glob(".fovea-hover-*"))
+    assert not AssetService.resolve_relative_path(AssetService.hover_preview_sprite_path(video_id)).exists()
+
+
+@pytest.mark.anyio
+async def test_hover_preview_startup_recovery_queues_missing_but_keeps_current_asset(
+    db_session, monkeypatch, tmp_path
+):
+    now = datetime.now(timezone.utc)
+    current_id, missing_id = uuid.uuid4(), uuid.uuid4()
+    current_video, missing_video = _ready_video(current_id, now), _ready_video(missing_id, now)
+    assets_root = tmp_path / "assets"
+    current_path = assets_root / AssetService.hover_preview_sprite_path(current_id)
+    current_path.parent.mkdir(parents=True, exist_ok=True)
+    current_path.write_bytes(b"sprite")
+    settings = _hover_test_settings(assets_root)
+    monkeypatch.setattr("app.services.asset_service.get_settings", lambda: settings)
+    current_asset = VideoAsset(
+        video_id=current_id,
+        asset_type=HOVER_PREVIEW,
+        relative_path=AssetService.hover_preview_sprite_path(current_id),
+        status="ready",
+        source_file_size=current_video.file_size,
+        source_file_mtime=current_video.file_mtime,
+        metadata_json={
+            "sheets": [AssetService.hover_preview_sprite_path(current_id)],
+            "frame_count": 30,
+            "duration_seconds": 5.0,
+            "columns": 10,
+            "tile_width": 320,
+            "tile_height": 180,
+            "rows": 3,
+        },
+    )
+    missing_asset = VideoAsset(
+        video_id=missing_id,
+        asset_type=HOVER_PREVIEW,
+        relative_path=AssetService.hover_preview_sprite_path(missing_id),
+        status="ready",
+        source_file_size=missing_video.file_size,
+        source_file_mtime=missing_video.file_mtime,
+        metadata_json={
+            "sheets": [AssetService.hover_preview_sprite_path(missing_id)],
+            "frame_count": 30,
+            "duration_seconds": 5.0,
+            "columns": 10,
+            "tile_width": 160,
+            "tile_height": 90,
+            "rows": 3,
+        },
+    )
+    db_session.add_all([current_video, missing_video, current_asset, missing_asset])
+    await db_session.commit()
+
+    queued = await AssetService.mark_stale_hover_previews_pending()
+
+    assert queued == [missing_id]
+    await db_session.refresh(current_asset)
+    await db_session.refresh(missing_asset)
+    assert current_asset.status == "ready"
+    assert missing_asset.status == "pending"
+
+
+@pytest.mark.anyio
+async def test_hover_preview_request_queues_old_160_by_90_sprite(db_session, monkeypatch, tmp_path):
+    video_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    video = _ready_video(video_id, now)
+    sprite_relative = AssetService.hover_preview_sprite_path(video_id)
+    sprite = tmp_path / sprite_relative
+    sprite.parent.mkdir(parents=True, exist_ok=True)
+    sprite.write_bytes(b"old 160x90 sprite")
+    old_asset = VideoAsset(
+        video_id=video_id,
+        asset_type=HOVER_PREVIEW,
+        relative_path=sprite_relative,
+        status="ready",
+        source_file_size=video.file_size,
+        source_file_mtime=video.file_mtime,
+        metadata_json={
+            "sheets": [sprite_relative],
+            "frame_count": 30,
+            "duration_seconds": 5.0,
+            "columns": 10,
+            "rows": 3,
+            "tile_width": 160,
+            "tile_height": 90,
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.asset_service.get_settings",
+        lambda: _hover_test_settings(tmp_path),
+    )
+    db_session.add_all([video, old_asset])
+    await db_session.commit()
+
+    assert await AssetService.request_hover_preview(video_id) is True
+    await db_session.refresh(old_asset)
+    assert old_asset.status == "pending"
+
+
+@pytest.mark.anyio
+async def test_source_signature_scan_invalidates_all_asset_types_only_after_change(db_session, tmp_path):
+    source = tmp_path / "video.mp4"
+    source.write_bytes(b"original source")
+    original_stat = source.stat()
+    original_mtime = datetime.fromtimestamp(original_stat.st_mtime, timezone.utc)
+    now = datetime.now(timezone.utc)
+    video_id = uuid.uuid4()
+    video = Video(
+        id=video_id,
+        file_path=str(source),
+        title="Changed source",
+        file_size=original_stat.st_size,
+        file_mtime=original_mtime,
+        fingerprint=f"{original_stat.st_size}:{original_mtime.isoformat()}",
+        status="ready",
+        added_at=now,
+        last_seen_at=now,
+    )
+    watch_path = WatchPath(
+        id=uuid.uuid4(),
+        path=str(tmp_path),
+        label="Assets test",
+        scan_recursive=True,
+        enabled=True,
+    )
+    assets = [
+        VideoAsset(video_id=video_id, asset_type=THUMBNAIL, relative_path=AssetService.thumbnail_path(video_id), status="ready"),
+        VideoAsset(video_id=video_id, asset_type=SEEKBAR_PREVIEW, relative_path=AssetService.seekbar_vtt_path(video_id), status="ready"),
+        VideoAsset(video_id=video_id, asset_type=HOVER_PREVIEW, relative_path=AssetService.hover_preview_sprite_path(video_id), status="ready"),
+    ]
+    db_session.add_all([video, watch_path, *assets])
+    await db_session.commit()
+
+    await ScanService.scan(watch_path.id)
+    for asset in assets:
+        await db_session.refresh(asset)
+        assert asset.status == "ready"
+
+    source.write_bytes(b"changed source size")
+    changed_mtime = original_stat.st_mtime + 2
+    os.utime(source, (changed_mtime, changed_mtime))
+    await ScanService.scan(watch_path.id)
+
+    for asset in assets:
+        await db_session.refresh(asset)
+        assert asset.status == "stale"
 
 
 @pytest.mark.anyio
@@ -172,8 +558,11 @@ async def test_malformed_preview_metadata_does_not_stop_startup_recovery(
 
 @pytest.mark.anyio
 async def test_preview_routes_serve_vtt_and_validate_sprite_index(db_session, client, monkeypatch, tmp_path):
-    now = datetime.now(timezone.utc)
-    video = Video(id=uuid.uuid4(), file_path="/media/preview.mp4", title="Preview", file_size=12,
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    stat = source.stat()
+    now = datetime.fromtimestamp(stat.st_mtime, timezone.utc)
+    video = Video(id=uuid.uuid4(), file_path=str(source), title="Preview", file_size=stat.st_size,
                   file_mtime=now, status="ready", added_at=now, last_seen_at=now)
     vtt = tmp_path / "preview.vtt"
     sprite = tmp_path / "sprite.jpg"
@@ -181,6 +570,7 @@ async def test_preview_routes_serve_vtt_and_validate_sprite_index(db_session, cl
     sprite.write_bytes(b"jpeg")
     asset = VideoAsset(video_id=video.id, asset_type=SEEKBAR_PREVIEW,
                        relative_path=f"previews/{video.id}.vtt", status="ready",
+                       source_file_mtime=video.file_mtime, source_file_size=video.file_size,
                        metadata_json={"sheets": [f"previews/{video.id}-0000.jpg"]})
     db_session.add_all([video, asset])
     await db_session.commit()
@@ -217,11 +607,19 @@ async def test_sprite_route_returns_not_found_for_malformed_or_unavailable_metad
     now = datetime.now(timezone.utc)
     video_id = uuid.uuid4()
     video = _ready_video(video_id, now)
+    source = tmp_path / f"{video_id}.mp4"
+    source.write_bytes(b"source")
+    stat = source.stat()
+    video.file_path = str(source)
+    video.file_size = stat.st_size
+    video.file_mtime = datetime.fromtimestamp(stat.st_mtime, timezone.utc)
     asset = VideoAsset(
         video_id=video_id,
         asset_type=SEEKBAR_PREVIEW,
         relative_path=AssetService.seekbar_vtt_path(video_id),
         status="ready",
+        source_file_mtime=video.file_mtime,
+        source_file_size=video.file_size,
         metadata_json=metadata_json,
     )
     monkeypatch.setattr(
@@ -235,6 +633,49 @@ async def test_sprite_route_returns_not_found_for_malformed_or_unavailable_metad
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Seekbar preview sprite not found."}
+
+
+@pytest.mark.anyio
+async def test_hover_sprite_route_serves_tracked_current_sprite_and_rejects_stale_source(
+    db_session, client, monkeypatch, tmp_path
+):
+    source = tmp_path / "video.mp4"
+    source.write_bytes(b"source")
+    stat = source.stat()
+    now = datetime.fromtimestamp(stat.st_mtime, timezone.utc)
+    video_id = uuid.uuid4()
+    video = _ready_video(video_id, now)
+    video.file_path = str(source)
+    video.file_size = stat.st_size
+    sprite_relative = AssetService.hover_preview_sprite_path(video_id)
+    sprite = tmp_path / "assets" / sprite_relative
+    sprite.parent.mkdir(parents=True, exist_ok=True)
+    sprite.write_bytes(b"sprite jpg")
+    asset = VideoAsset(
+        video_id=video_id,
+        asset_type=HOVER_PREVIEW,
+        relative_path=sprite_relative,
+        status="ready",
+        source_file_size=video.file_size,
+        source_file_mtime=video.file_mtime,
+        metadata_json={"sheets": [sprite_relative]},
+    )
+    monkeypatch.setattr(
+        "app.services.asset_service.get_settings",
+        lambda: SimpleNamespace(assets_path=str(tmp_path / "assets")),
+    )
+    db_session.add_all([video, asset])
+    await db_session.commit()
+
+    response = await client.get(f"/api/v1/assets/hover-previews/{video_id}")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/jpeg")
+    assert response.headers["cache-control"] == "public, max-age=0, must-revalidate"
+    assert response.content == b"sprite jpg"
+
+    source.write_bytes(b"source changed")
+    stale = await client.get(f"/api/v1/assets/hover-previews/{video_id}")
+    assert stale.status_code == 404
 
 
 @pytest.mark.anyio
@@ -374,12 +815,15 @@ async def test_thumbnail_request_has_explicit_missing_unavailable_and_generating
 @pytest.mark.anyio
 async def test_served_thumbnail_must_revalidate_after_replacement(db_session, client, monkeypatch, tmp_path):
     now = datetime.now(timezone.utc)
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    stat = source.stat()
     video = Video(
         id=uuid.uuid4(),
-        file_path="/media/example.mp4",
+        file_path=str(source),
         title="Example",
-        file_size=1024,
-        file_mtime=now,
+        file_size=stat.st_size,
+        file_mtime=datetime.fromtimestamp(stat.st_mtime, timezone.utc),
         status="ready",
         added_at=now,
         last_seen_at=now,
@@ -389,6 +833,8 @@ async def test_served_thumbnail_must_revalidate_after_replacement(db_session, cl
         asset_type="thumbnail",
         relative_path=f"thumbnails/{video.id}.jpg",
         status="ready",
+        source_file_mtime=video.file_mtime,
+        source_file_size=video.file_size,
     )
     thumbnail = tmp_path / "thumbnail.jpg"
     thumbnail.write_bytes(b"jpeg")

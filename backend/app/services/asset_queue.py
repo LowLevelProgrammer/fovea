@@ -17,31 +17,36 @@ class AssetGenerationQueue:
         self._queued: set[tuple[UUID, str]] = set()
         self._tasks: list[asyncio.Task] = []
         self._sequence = itertools.count()
+        self._lifecycle_lock = asyncio.Lock()
 
     async def start(self) -> None:
-        if self._tasks:
-            return
-        for video_id in await AssetService.mark_stale_thumbnails_pending():
-            self.enqueue(video_id, THUMBNAIL)
-        for video_id in await AssetService.mark_stale_previews_pending():
-            self.enqueue(video_id, SEEKBAR_PREVIEW)
-        self._tasks = [
-            asyncio.create_task(self._worker(index))
-            for index in range(max(1, min(2, get_settings().asset_worker_count)))
-        ]
+        async with self._lifecycle_lock:
+            if self._tasks:
+                return
+            for video_id in await AssetService.mark_stale_thumbnails_pending():
+                self.enqueue(video_id, THUMBNAIL)
+            for video_id in await AssetService.mark_stale_previews_pending():
+                self.enqueue(video_id, SEEKBAR_PREVIEW)
+            for video_id in await AssetService.mark_stale_hover_previews_pending():
+                self.enqueue(video_id, HOVER_PREVIEW)
+            self._tasks = [
+                asyncio.create_task(self._worker(index))
+                for index in range(max(1, min(2, get_settings().asset_worker_count)))
+            ]
 
     async def stop(self) -> None:
-        for task in self._tasks:
-            task.cancel()
-        for task in self._tasks:
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        self._tasks = []
-        self._queued.clear()
-        self._queue = asyncio.PriorityQueue()
-        self._sequence = itertools.count()
+        async with self._lifecycle_lock:
+            for task in self._tasks:
+                task.cancel()
+            for task in self._tasks:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            self._tasks = []
+            self._queued.clear()
+            self._queue = asyncio.PriorityQueue()
+            self._sequence = itertools.count()
 
     def enqueue(self, video_id: UUID, asset_type: str = THUMBNAIL) -> None:
         task = (video_id, asset_type)

@@ -16,6 +16,7 @@ export function SimilarVideos({ videos, onSelectVideo }: SimilarVideosProps) {
           <VideoCard
             key={video.id}
             video={{ ...video, recommendation_reason: video.similarity_reason }}
+            enableHoverPreview
             onClick={() => onSelectVideo(video.id)}
           />
         ))}

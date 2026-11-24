@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     thumbnail_width: int = 480
     preview_tile_width: int = 160
     preview_tile_height: int = 90
+    hover_preview_tile_width: int = 320
+    hover_preview_tile_height: int = 180
     preview_sprite_columns: int = 10
     preview_sprite_max_frames: int = 100
     frontend_dist_path: str = "/app/frontend/dist"

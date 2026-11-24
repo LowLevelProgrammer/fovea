@@ -1,4 +1,6 @@
 import logging
+from datetime import datetime, timezone
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status, Header
@@ -16,11 +18,42 @@ from app.models.video_asset import VideoAsset
 from app.services.scan_service import ScanService
 from app.services.similarity_service import SimilarityService
 from app.services.asset_queue import asset_queue
-from app.services.asset_service import AssetService, SEEKBAR_PREVIEW, THUMBNAIL, ThumbnailRequestResult
+from app.services.asset_service import AssetService, HOVER_PREVIEW, SEEKBAR_PREVIEW, THUMBNAIL, ThumbnailRequestResult
 from app.core.range_stream import range_stream_response
 
 router = APIRouter(tags=["videos"])
 logger = logging.getLogger(__name__)
+
+
+async def _get_current_ready_asset(video_id: UUID, asset_type: str) -> VideoAsset | None:
+    async with async_session() as session:
+        result = await session.execute(
+            select(VideoAsset, Video)
+            .join(Video, Video.id == VideoAsset.video_id)
+            .where(
+                VideoAsset.video_id == video_id,
+                VideoAsset.asset_type == asset_type,
+                VideoAsset.status == "ready",
+            )
+        )
+        row = result.one_or_none()
+    if row is None:
+        return None
+    asset, video = row
+    try:
+        source_stat = Path(video.file_path).stat()
+    except OSError:
+        return None
+    source_mtime = datetime.fromtimestamp(source_stat.st_mtime, timezone.utc)
+    if (
+        video.status != "ready"
+        or asset.source_file_size != video.file_size
+        or asset.source_file_mtime != video.file_mtime
+        or source_stat.st_size != video.file_size
+        or source_mtime != video.file_mtime
+    ):
+        return None
+    return asset
 
 
 @router.post("/library/scan", response_model=ScanResultResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -192,16 +225,7 @@ async def stream_video(
 
 @router.get("/assets/thumbnails/{video_id}")
 async def serve_thumbnail(video_id: UUID) -> FileResponse:
-    async with async_session() as session:
-        asset = (
-            await session.execute(
-                select(VideoAsset).where(
-                    VideoAsset.video_id == video_id,
-                    VideoAsset.asset_type == THUMBNAIL,
-                    VideoAsset.status == "ready",
-                )
-            )
-        ).scalar_one_or_none()
+    asset = await _get_current_ready_asset(video_id, THUMBNAIL)
     if asset is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thumbnail not found.")
     try:
@@ -219,12 +243,7 @@ async def serve_thumbnail(video_id: UUID) -> FileResponse:
 
 @router.get("/assets/previews/{video_id}/metadata")
 async def serve_seekbar_preview_vtt(video_id: UUID) -> FileResponse:
-    async with async_session() as session:
-        asset = (await session.execute(select(VideoAsset).where(
-            VideoAsset.video_id == video_id,
-            VideoAsset.asset_type == SEEKBAR_PREVIEW,
-            VideoAsset.status == "ready",
-        ))).scalar_one_or_none()
+    asset = await _get_current_ready_asset(video_id, SEEKBAR_PREVIEW)
     if asset is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Seekbar preview not found.")
     try:
@@ -238,12 +257,7 @@ async def serve_seekbar_preview_vtt(video_id: UUID) -> FileResponse:
 
 @router.get("/assets/previews/{video_id}/sprites/{sheet_index}")
 async def serve_seekbar_preview_sprite(video_id: UUID, sheet_index: int) -> FileResponse:
-    async with async_session() as session:
-        asset = (await session.execute(select(VideoAsset).where(
-            VideoAsset.video_id == video_id,
-            VideoAsset.asset_type == SEEKBAR_PREVIEW,
-            VideoAsset.status == "ready",
-        ))).scalar_one_or_none()
+    asset = await _get_current_ready_asset(video_id, SEEKBAR_PREVIEW)
     if asset is None or sheet_index < 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Seekbar preview sprite not found.")
     metadata = asset.metadata_json
@@ -268,6 +282,31 @@ async def serve_seekbar_preview_sprite(video_id: UUID, sheet_index: int) -> File
     except (OSError, RuntimeError, ValueError, TypeError) as exc:
         logger.warning("Seekbar preview sprite path is invalid for video %s at index %s: %s", video_id, sheet_index, exc)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Seekbar preview sprite not found.")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=0, must-revalidate"})
+
+
+@router.get("/assets/hover-previews/{video_id}")
+async def serve_hover_preview_sprite(video_id: UUID) -> FileResponse:
+    asset = await _get_current_ready_asset(video_id, HOVER_PREVIEW)
+    if asset is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hover preview not found.")
+    expected_path = AssetService.hover_preview_sprite_path(video_id)
+    metadata = asset.metadata_json
+    if (
+        asset.relative_path != expected_path
+        or not isinstance(metadata, dict)
+        or metadata.get("sheets") != [expected_path]
+    ):
+        logger.warning("Hover preview metadata is malformed for video %s", video_id)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hover preview not found.")
+    try:
+        path = AssetService.resolve_relative_path(expected_path)
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        logger.warning("Hover preview path is invalid for video %s: %s", video_id, exc)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hover preview not found.")
+    if not path.is_file():
+        logger.warning("Hover preview file is missing for video %s", video_id)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hover preview not found.")
     return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=0, must-revalidate"})
 
 
